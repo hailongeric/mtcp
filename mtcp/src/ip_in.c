@@ -20,7 +20,7 @@ ProcessIPv4Packet(mtcp_manager_t mtcp, uint32_t cur_ts,
 	struct iphdr* iph = (struct iphdr *)(pkt_data + sizeof(struct ethhdr));
 	int ip_len = ntohs(iph->tot_len);
 	int rc = -1;
-
+	HL_PRINT("[+] ProcessIPv4Packet\n");
 	/* drop the packet shorter than ip header */
 	if (ip_len < sizeof(struct iphdr))
 		return ERROR;
@@ -48,7 +48,7 @@ ProcessIPv4Packet(mtcp_manager_t mtcp, uint32_t cur_ts,
 		mtcp->iom->release_pkt(mtcp->ctx, ifidx, pkt_data, len);
 		return FALSE;
 	}
-	
+	HL_PRINT("ProcessIPv4Packet\n");
 	switch (iph->protocol) {
 		case IPPROTO_TCP:
 			return ProcessTCPPacket(mtcp, cur_ts, ifidx, iph, ip_len);

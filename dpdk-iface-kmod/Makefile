@@ -3,17 +3,19 @@ ifeq ($(RTE_SDK),)
 $(error "Please define RTE_SDK environment variable")
 endif
 
-ifeq ($(RTE_TARGET),)
-$(error "Please define RTE_TARGET environment variable")
-endif
+# ifeq ($(RTE_TARGET),)
+# $(error "Please define RTE_TARGET environment variable")
+# endif
 #-------------------------------------------------------------------------#
-include $(RTE_SDK)/mk/rte.vars.mk
+# include $(RTE_SDK)/mk/rte.vars.mk
 CC=gcc
 obj-m=dpdk_iface.o
-DPDK_MACHINE_LINKER_FLAGS=$${RTE_SDK}/$${RTE_TARGET}/lib/ldflags.txt
-DPDK_MACHINE_LDFLAGS=$(shell cat ${DPDK_MACHINE_LINKER_FLAGS})
-DPDK_INC=${RTE_SDK}/${RTE_TARGET}/include
-DPDK_LIB=${RTE_SDK}/${RTE_TARGET}/lib
+# DPDK_MACHINE_LINKER_FLAGS=$${RTE_SDK}/$${RTE_TARGET}/lib/ldflags.txt
+# DPDK_MACHINE_LDFLAGS=$(shell cat ${DPDK_MACHINE_LINKER_FLAGS})
+DPDK_MACHINE_LDFLAGS=$(shell pkg-config --libs libdpdk)
+DPDK_INC=/opt/mellanox/dpdk_21/include
+DPDK_LIB=/opt/mellanox/dpdk_21/lib
+CFLAGS=$(pkg-config --cflags libdpdk)
 appname=dpdk_iface_main
 #-------------------------------------------------------------------------#
 ifeq ($V,) # no echo

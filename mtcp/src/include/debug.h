@@ -69,7 +69,15 @@
 
 #endif /* INFO */
 
+
 #define TRACE_CONFIG(f, m...) fprintf(stderr, f, ##m)
+
+// #define HL_DBG
+#ifdef HL_DBG
+#define HL_PRINT(f, m...) fprintf(stderr, f, ##m)
+#else
+#define HL_PRINT(f, m...) (void)0
+#endif
 
 #ifdef DBGLOG
 #define TRACE_LOG(f, m...) TRACE_INFO(f, ##m)

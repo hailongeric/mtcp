@@ -114,6 +114,8 @@ netdev_fix_features(struct net_device *netdev, netdev_features_t features)
 	(void)features;
 	return 0;
 }
+
+
 /*----------------------------------------------------------------------------*/
 /**
  * dummy function that returns void
@@ -124,6 +126,18 @@ netdev_no_ret(struct net_device *netdev)
 	(void)netdev;
 	return;
 }
+
+
+/**
+ * dummy function that returns void (with two args)
+ */
+static void 
+netdev_no_ret_two_args(struct net_device *netdev, unsigned int k) 
+{
+	(void)netdev;
+	return;
+}
+
 /*----------------------------------------------------------------------------*/
 /**
  * dummy tx function
@@ -146,7 +160,7 @@ static const struct net_device_ops netdev_ops = {
         .ndo_validate_addr      = netdev_open,
         .ndo_set_mac_address    = NULL,
         .ndo_change_mtu         = NULL,
-        .ndo_tx_timeout         = netdev_no_ret,
+        .ndo_tx_timeout         = netdev_no_ret_two_args,
         .ndo_vlan_rx_add_vid    = NULL,
         .ndo_vlan_rx_kill_vid   = NULL,
         .ndo_do_ioctl           = NULL,

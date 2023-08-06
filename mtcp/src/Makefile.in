@@ -42,13 +42,14 @@ endif
 #
 
 GCC_OPT += -Wall -fPIC -fgnu89-inline -Werror
-#DBG_OPT = -DDBGMSG -DDBGFUNC -DSTREAM -DSTATE -DTSTAT -DAPP -DEPOLL
-#DBG_OPT = -DDBGMSG -DDBGFUNC -DSTREAM -DSTATE
-#DBG_OPT += -DPKTDUMP
-#DBG_OPT += -DDUMP_STREAM
+
+# DBG_OPT = -DDBGMSG -DDBGFUNC -DSTREAM -DSTATE -DTSTAT -DAPP -DEPOLL
+# DBG_OPT = -DDBGMSG -DDBGFUNC -DSTREAM -DSTATE
+# DBG_OPT += -DPKTDUMP
+# DBG_OPT += -DDUMP_STREAM
 #GCC_OPT += -g -DNETSTAT -DINFO -DDBGERR -DDBGCERR
 GCC_OPT += -DNDEBUG -g -O3 -DNETSTAT -DINFO -DDBGERR -DDBGCERR
-#GCC_OPT += -DNDEBUG -g -DNETSTAT -DINFO -DDBGERR -DDBGCERR
+# GCC_OPT += -DNDEBUG -g -DNETSTAT -DINFO -DDBGERR -DDBGCERR
 GCC_OPT += $(DBG_OPT)
 GCC_OPT += -D__USRLIB__
 
@@ -98,14 +99,25 @@ INC += -I$(PS_DIR)/include
 
 # CFLAGS for DPDK-related compilation
 ifeq ($(DPDK), 1)
-include $(RTE_SDK)/mk/rte.vars.mk
-CFLAGS+=@CFLAGS@
+CFLAGS+=$(shell pkg-config --cflags libdpdk)
+LDFLAGS+=$(shell pkg-config --libs libdpdk)
+# include $(RTE_SDK)/mk/rte.vars.mk
+CFLAGS+=@CFLAGS@ -Wno-stringop-truncation
+
 ifeq ($(ENFORCE_RX_IDLE), 1)
 INC += -DENFORCE_RX_IDLE -DRX_IDLE_THRESH=@RX_IDLE_THRESH@
 endif
 else
 INC += -DDISABLE_DPDK
 endif
+
+$(info "########################################################################")
+$(info CFLAGS=$(CFLAGS))
+$(info DPDK=$(DPDK))
+TEEEE:=$(shell pkg-config --cflags libdpdk 2>&1)
+$(info TEEEE=$(TEEEE))
+$(info @CFLAGS@)
+$(info "########################################################################")
 
 ifeq ($(CCP), 1)
 LIBCCP_PATH=./libccp

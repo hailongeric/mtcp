@@ -57,17 +57,17 @@ EthernetOutput(struct mtcp_manager *mtcp, uint16_t h_proto,
 	
 	buf = mtcp->iom->get_wptr(mtcp->ctx, eidx, iplen + ETHERNET_HEADER_LEN);
 	if (!buf) {
-		//TRACE_DBG("Failed to get available write buffer\n");
+		TRACE_ERROR("Failed to get available write buffer\n");
 		return NULL;
 	}
 	//memset(buf, 0, ETHERNET_HEADER_LEN + iplen);
 
-#if 0
-	TRACE_DBG("dst_hwaddr: %02X:%02X:%02X:%02X:%02X:%02X\n",
-				dst_haddr[0], dst_haddr[1], 
-				dst_haddr[2], dst_haddr[3], 
-				dst_haddr[4], dst_haddr[5]);
-#endif
+// #if 1
+// 	TRACE_INFO("dst_hwaddr: %02X:%02X:%02X:%02X:%02X:%02X\n",
+// 				dst_haddr[0], dst_haddr[1], 
+// 				dst_haddr[2], dst_haddr[3], 
+// 				dst_haddr[4], dst_haddr[5]);
+// #endif
 
 	ethh = (struct ethhdr *)buf;
 	for (i = 0; i < ETH_ALEN; i++) {

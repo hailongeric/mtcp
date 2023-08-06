@@ -63,7 +63,7 @@ static struct rte_mempool *pktmbuf_pool = NULL;
 //#define DEBUG				1
 #ifdef DEBUG
 /* ethernet addresses of ports */
-static struct ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
+static struct rte_ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
 #endif
 
 static struct rte_eth_dev_info dev_info[RTE_MAX_ETHPORTS];
@@ -367,7 +367,7 @@ onvm_get_rptr(struct mtcp_thread_context *ctxt, int ifidx, int index, uint16_t *
 	dpc->rmbufs[ifidx].m_table[index] = m;
 
 	/* verify checksum values from ol_flags */
-	if ((m->ol_flags & (PKT_RX_L4_CKSUM_BAD | PKT_RX_IP_CKSUM_BAD)) != 0) {
+	if ((m->ol_flags & (RTE_MBUF_F_RX_L4_CKSUM_BAD | RTE_MBUF_F_RX_IP_CKSUM_BAD)) != 0) {
 		TRACE_ERROR("%s(%p, %d, %d): mbuf with invalid checksum: "
 			    "%p(%lu);\n",
 			    __func__, ctxt, ifidx, index, m, m->ol_flags);
@@ -466,7 +466,7 @@ onvm_dev_ioctl(struct mtcp_thread_context *ctx, int nif, int cmd, void *argp)
 		if ((dev_info[nif].tx_offload_capa & DEV_TX_OFFLOAD_IPV4_CKSUM) == 0)
 			goto dev_ioctl_err;
 		m = dpc->wmbufs[eidx].m_table[len_of_mbuf - 1];
-		m->ol_flags = PKT_TX_IP_CKSUM | PKT_TX_IPV4;
+		m->ol_flags = RTE_MBUF_F_TX_IP_CKSUM | RTE_MBUF_F_TX_IPV4;
 		m->l2_len = sizeof(struct ether_hdr);
 		m->l3_len = (iph->ihl<<2);
 		break;
@@ -475,7 +475,7 @@ onvm_dev_ioctl(struct mtcp_thread_context *ctx, int nif, int cmd, void *argp)
 			goto dev_ioctl_err;
 		m = dpc->wmbufs[eidx].m_table[len_of_mbuf - 1];
 		tcph = (struct tcphdr *)((unsigned char *)iph + (iph->ihl<<2));
-		m->ol_flags |= PKT_TX_TCP_CKSUM;
+		m->ol_flags |= RTE_MBUF_F_TX_TCP_CKSUM;
 		tcph->check = rte_ipv4_phdr_cksum((struct ipv4_hdr *)iph, m->ol_flags);
 		break;
 #ifdef ENABLELRO
@@ -516,7 +516,7 @@ onvm_dev_ioctl(struct mtcp_thread_context *ctx, int nif, int cmd, void *argp)
 		m->l2_len = sizeof(struct ether_hdr);
 		m->l3_len = (iph->ihl<<2);
 		m->l4_len = (tcph->doff<<2);
-		m->ol_flags = PKT_TX_TCP_CKSUM | PKT_TX_IP_CKSUM | PKT_TX_IPV4;
+		m->ol_flags = RTE_MBUF_F_TX_TCP_CKSUM | RTE_MBUF_F_TX_IP_CKSUM | RTE_MBUF_F_TX_IPV4;
 		tcph->check = rte_ipv4_phdr_cksum((struct ipv4_hdr *)iph, m->ol_flags);
 		break;
 	case PKT_RX_IP_CSUM:
