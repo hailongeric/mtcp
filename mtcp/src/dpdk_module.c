@@ -41,10 +41,12 @@
 #define MAX_RX_QUEUE_PER_LCORE MAX_CPUS
 #define MAX_TX_QUEUE_PER_PORT MAX_CPUS
 
+// !!! HLMODIFY very important
 #ifdef ENABLELRO
 #define BUF_SIZE 16384
 #else
-#define BUF_SIZE 2048
+// #define BUF_SIZE 2048
+#define BUF_SIZE 16384
 #endif /* !ENABLELRO */
 #define MBUF_SIZE (BUF_SIZE + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
 #define NB_MBUF 8192
@@ -127,6 +129,7 @@ static struct rte_eth_conf port_conf = {
 		// #endif
 		// 					 ),
 		// #endif /* !17.08 */
+		.mtu = 9000,
 
 		.split_hdr_size = 0,
 		// #if RTE_VERSION < RTE_VERSION_NUM(18, 5, 0, 0)
@@ -148,7 +151,7 @@ static struct rte_eth_conf port_conf = {
 		.mq_mode = ETH_MQ_TX_NONE,
 
 		// #if RTE_VERSION >= RTE_VERSION_NUM(18, 5, 0, 0)
-		.offloads = (DEV_TX_OFFLOAD_IPV4_CKSUM | DEV_TX_OFFLOAD_UDP_CKSUM | DEV_TX_OFFLOAD_TCP_CKSUM),
+		.offloads = (DEV_TX_OFFLOAD_IPV4_CKSUM | DEV_TX_OFFLOAD_UDP_CKSUM | DEV_TX_OFFLOAD_TCP_CKSUM | DEV_TX_OFFLOAD_MULTI_SEGS),
 		// #endif
 	},
 };
@@ -334,6 +337,9 @@ int dpdk_send_pkts(struct mtcp_thread_context *ctxt, int ifidx)
 	/* if there are packets in the queue... flush them out to the wire */
 	if (dpc->wmbufs[ifidx].len > /*= MAX_PKT_BURST*/ 0)
 	{
+		// unsigned long time = 0;
+		// asm volatile("MRS %0, PMCCNTR_EL0" : "=r"(time));
+		// printf("dpdk wirte (%ld)\n", time);
 		struct rte_mbuf **pkts;
 #ifdef ENABLE_STATS_IOCTL
 #ifdef NETSTAT

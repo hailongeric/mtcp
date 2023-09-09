@@ -359,6 +359,16 @@ mtcp_epoll_ctl(mctx_t mctx, int epid,
 	return 0;
 }
 /*----------------------------------------------------------------------------*/
+
+pthread_cond_t *mtcp_get_epoll_wait_cond(mctx_t mtcx){
+	mtcp_manager_t mtcp;
+	
+	mtcp = GetMTCPManager(mtcx);
+	if (!mtcp) {
+		return NULL;
+	}
+	return &mtcp->ep->epoll_cond;
+}
 int 
 mtcp_epoll_wait(mctx_t mctx, int epid, 
 		struct mtcp_epoll_event *events, int maxevents, int timeout)

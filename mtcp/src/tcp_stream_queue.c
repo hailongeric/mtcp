@@ -1,4 +1,4 @@
-/* 
+/*
  * TCP stream queue - tcp_stream_queue.c/h
  *
  * EunYoung Jeong
@@ -38,21 +38,23 @@ struct stream_queue
 	volatile index_type _head;
 	volatile index_type _tail;
 
-	struct tcp_stream * volatile * _q;
+	struct tcp_stream *volatile *_q;
 };
 /*----------------------------------------------------------------------------*/
-stream_queue_int * 
+stream_queue_int *
 CreateInternalStreamQueue(int size)
 {
 	stream_queue_int *sq;
 
 	sq = (stream_queue_int *)calloc(1, sizeof(stream_queue_int));
-	if (!sq) {
+	if (!sq)
+	{
 		return NULL;
 	}
 
 	sq->array = (tcp_stream **)calloc(size, sizeof(tcp_stream *));
-	if (!sq->array) {
+	if (!sq->array)
+	{
 		free(sq);
 		return NULL;
 	}
@@ -64,13 +66,13 @@ CreateInternalStreamQueue(int size)
 	return sq;
 }
 /*----------------------------------------------------------------------------*/
-void 
-DestroyInternalStreamQueue(stream_queue_int *sq)
+void DestroyInternalStreamQueue(stream_queue_int *sq)
 {
 	if (!sq)
 		return;
-	
-	if (sq->array) {
+
+	if (sq->array)
+	{
 		free(sq->array);
 		sq->array = NULL;
 	}
@@ -78,22 +80,24 @@ DestroyInternalStreamQueue(stream_queue_int *sq)
 	free(sq);
 }
 /*----------------------------------------------------------------------------*/
-int 
-StreamInternalEnqueue(stream_queue_int *sq, struct tcp_stream *stream)
+int StreamInternalEnqueue(stream_queue_int *sq, struct tcp_stream *stream)
 {
-	if (sq->count >= sq->size) {
+	if (sq->count >= sq->size)
+	{
 		/* queue is full */
 		TRACE_INFO("[WARNING] Queue overflow. Set larger queue size! "
-				"count: %d, size: %d\n", sq->count, sq->size);
+				   "count: %d, size: %d\n",
+				   sq->count, sq->size);
 		return -1;
 	}
 
 	sq->array[sq->last++] = stream;
 	sq->count++;
-	if (sq->last >= sq->size) {
+	if (sq->last >= sq->size)
+	{
 		sq->last = 0;
 	}
-	assert (sq->count <= sq->size);
+	assert(sq->count <= sq->size);
 
 	return 0;
 }
@@ -103,13 +107,15 @@ StreamInternalDequeue(stream_queue_int *sq)
 {
 	struct tcp_stream *stream = NULL;
 
-	if (sq->count <= 0) {
+	if (sq->count <= 0)
+	{
 		return NULL;
 	}
 
 	stream = sq->array[sq->first++];
 	assert(stream != NULL);
-	if (sq->first >= sq->size) {
+	if (sq->first >= sq->size)
+	{
 		sq->first = 0;
 	}
 	sq->count--;
@@ -118,31 +124,30 @@ StreamInternalDequeue(stream_queue_int *sq)
 	return stream;
 }
 /*---------------------------------------------------------------------------*/
-static inline index_type 
+static inline index_type
 NextIndex(stream_queue_t sq, index_type i)
 {
-	return (i != sq->_capacity ? i + 1: 0);
+	return (i != sq->_capacity ? i + 1 : 0);
 }
 /*---------------------------------------------------------------------------*/
-static inline index_type 
+static inline index_type
 PrevIndex(stream_queue_t sq, index_type i)
 {
-	return (i != 0 ? i - 1: sq->_capacity);
+	return (i != 0 ? i - 1 : sq->_capacity);
 }
 /*---------------------------------------------------------------------------*/
-int 
-StreamQueueIsEmpty(stream_queue_t sq)
+int StreamQueueIsEmpty(stream_queue_t sq)
 {
 	return (sq->_head == sq->_tail);
 }
 /*---------------------------------------------------------------------------*/
-static inline void 
-StreamMemoryBarrier(tcp_stream * volatile stream, volatile index_type index)
+static inline void
+StreamMemoryBarrier(tcp_stream *volatile stream, volatile index_type index)
 {
-	__asm__ volatile("" : : "m" (stream), "m" (index));
+	__asm__ volatile("" : : "m"(stream), "m"(index));
 }
 /*---------------------------------------------------------------------------*/
-stream_queue_t 
+stream_queue_t
 CreateStreamQueue(int capacity)
 {
 	stream_queue_t sq;
@@ -152,7 +157,8 @@ CreateStreamQueue(int capacity)
 		return NULL;
 
 	sq->_q = (tcp_stream **)calloc(capacity + 1, sizeof(tcp_stream *));
-	if (!sq->_q) {
+	if (!sq->_q)
+	{
 		free(sq);
 		return NULL;
 	}
@@ -163,13 +169,13 @@ CreateStreamQueue(int capacity)
 	return sq;
 }
 /*---------------------------------------------------------------------------*/
-void 
-DestroyStreamQueue(stream_queue_t sq)
+void DestroyStreamQueue(stream_queue_t sq)
 {
 	if (!sq)
 		return;
 
-	if (sq->_q) {
+	if (sq->_q)
+	{
 		free((void *)sq->_q);
 		sq->_q = NULL;
 	}
@@ -177,17 +183,20 @@ DestroyStreamQueue(stream_queue_t sq)
 	free(sq);
 }
 /*---------------------------------------------------------------------------*/
-int 
-StreamEnqueue(stream_queue_t sq, tcp_stream *stream)
+int StreamEnqueue(stream_queue_t sq, tcp_stream *stream)
 {
 	index_type h = sq->_head;
 	index_type t = sq->_tail;
 	index_type nt = NextIndex(sq, t);
 
-	if (nt != h) {
+	if (nt != h)
+	{
 		sq->_q[t] = stream;
 		StreamMemoryBarrier(sq->_q[t], sq->_tail);
 		sq->_tail = nt;
+		// unsigned long time = 0;
+		// asm volatile("MRS %0, PMCCNTR_EL0" : "=r"(time));
+		// printf("mtcp_write stream (%ld)\n", time);
 		return 0;
 	}
 
@@ -201,7 +210,11 @@ StreamDequeue(stream_queue_t sq)
 	index_type h = sq->_head;
 	index_type t = sq->_tail;
 
-	if (h != t) {
+	if (h != t)
+	{
+		// unsigned long time = 0;
+		// asm volatile("MRS %0, PMCCNTR_EL0" : "=r"(time));
+		// printf("handle_application_call sendstream (%ld)\n", time);
 		tcp_stream *stream = sq->_q[h];
 		StreamMemoryBarrier(sq->_q[h], sq->_head);
 		sq->_head = NextIndex(sq, h);

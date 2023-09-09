@@ -843,6 +843,14 @@ InterruptApplication(mtcp_manager_t mtcp)
 		}
 	}
 }
+
+static unsigned long dpdk_run_look_counts = 0;
+
+// uint64_t result = 0;
+
+// asm volatile("MRS %0, PMCCNTR_EL0"
+//              : "=r"(result));
+static struct timeval hl_time = {0};
 /*----------------------------------------------------------------------------*/
 static void
 RunMainLoop(struct mtcp_thread_context *ctx)
@@ -864,8 +872,19 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 
 		STAT_COUNT(mtcp->runstat.rounds);
 		recv_cnt = 0;
+		dpdk_run_look_counts++;
 
 		gettimeofday(&cur_ts, NULL);
+		// unsigned long time2 = 0;
+		// asm volatile("MRS %0, PMCCNTR_EL0" : "=r"(time2));
+		// printf("dpdk loop (%ld)\n", time2);
+		if (dpdk_run_look_counts > 1000000)
+		{
+			double difftime = (double)(cur_ts.tv_sec - hl_time.tv_sec) + (double)(cur_ts.tv_usec - hl_time.tv_usec) / 1000000;
+			printf("CPU %d pid (%d) CONFIG.eths_num(%d) mtcp->flow_cnt(%d) dpdk speed %lf KS\n", ctx->cpu, gettid(), CONFIG.eths_num, mtcp->flow_cnt, dpdk_run_look_counts * 1.0 / 1000.0 / difftime);
+			dpdk_run_look_counts = 0;
+			hl_time = cur_ts;
+		}
 		ts = TIMEVAL_TO_TS(&cur_ts);
 		mtcp->cur_ts = ts;
 
@@ -880,8 +899,10 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 			for (i = 0; i < recv_cnt; i++)
 			{
 				pktbuf = mtcp->iom->get_rptr(mtcp->ctx, rx_inf, i, &len);
-				if (pktbuf != NULL){
+				if (pktbuf != NULL)
+				{
 					HL_PRINT("[+] MTCP Recv Packet with length %u, process on core %d\n", len, ctx->cpu);
+					// printf("recv\n");
 					ProcessPacket(mtcp, rx_inf, ts, pktbuf, len);
 				}
 #ifdef NETSTAT
@@ -925,12 +946,14 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 		/* if epoll is in use, flush all the queued events */
 		if (mtcp->ep)
 		{
+			// printf("flush epoll\n");
 			FlushEpollEvents(mtcp, ts);
 		}
 
 		if (mtcp->flow_cnt > 0)
 		{
 			/* hadnle stream queues  */
+			// printf("HandleApplicationCalls\n");
 			HandleApplicationCalls(mtcp, ts);
 		}
 
@@ -940,6 +963,7 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 		/* send until tx is available */
 		for (tx_inf = 0; tx_inf < CONFIG.eths_num; tx_inf++)
 		{
+			// printf("send pkt\n");
 			mtcp->iom->send_pkts(ctx, tx_inf);
 		}
 

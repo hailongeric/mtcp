@@ -25,8 +25,8 @@
 #define MAX_OPTLINE_LEN 			1024
 #define ALL_STRING 				"all"
 
-static const char *route_file = 		"config/route.conf";
-static const char *arp_file = 			"config/arp.conf";
+static const char *route_file = 		"../../mtcp_conf/route.conf";
+static const char *arp_file = 			"../../mtcp_conf/arp.conf";
 struct mtcp_manager *g_mtcp[MAX_CPUS] = 	{NULL};
 struct mtcp_config CONFIG = {
 	/* set default configuration */
