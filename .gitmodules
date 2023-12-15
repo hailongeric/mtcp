@@ -1,3 +1,0 @@
-[submodule "mtcp/src/libccp"]
-	path = mtcp/src/libccp
-	url = https://github.com/ccp-project/libccp.git
