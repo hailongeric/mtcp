@@ -75,13 +75,13 @@
 #define TX_HTHRESH 0  /**< Default values of TX host threshold reg. */
 #define TX_WTHRESH 0  /**< Default values of TX write-back threshold reg. */
 
-#define MAX_PKT_BURST 64 /*128*/
+#define MAX_PKT_BURST 256 // 64 /*128*/
 
 /*
  * Configurable number of RX/TX ring descriptors
  */
-#define RTE_TEST_RX_DESC_DEFAULT 128
-#define RTE_TEST_TX_DESC_DEFAULT 128
+#define RTE_TEST_RX_DESC_DEFAULT 256
+#define RTE_TEST_TX_DESC_DEFAULT 256
 
 /*
  * Ethernet frame overhead
@@ -294,15 +294,15 @@ void dpdk_init_handle(struct mtcp_thread_context *ctxt)
 	}
 #endif /* !IP_DEFRAG */
 
-#ifdef ENABLE_STATS_IOCTL
-	dpc->fd = open(DEV_PATH, O_RDWR);
-	if (dpc->fd == -1)
-	{
-		TRACE_ERROR("Can't open " DEV_PATH " for context->cpu: %d! "
-					"Are you using mlx4/mlx5 driver?\n",
-					ctxt->cpu);
-	}
-#endif /* !ENABLE_STATS_IOCTL */
+	// #ifdef ENABLE_STATS_IOCTL
+	// 	dpc->fd = open(DEV_PATH, O_RDWR);
+	// 	if (dpc->fd == -1)
+	// 	{
+	// 		TRACE_ERROR("Can't open " DEV_PATH " for context->cpu: %d! "
+	// 					"Are you using mlx4/mlx5 driver?\n",
+	// 					ctxt->cpu);
+	// 	}
+	// #endif /* !ENABLE_STATS_IOCTL */
 }
 /*----------------------------------------------------------------------------*/
 int dpdk_link_devices(struct mtcp_thread_context *ctxt)
@@ -382,6 +382,7 @@ int dpdk_send_pkts(struct mtcp_thread_context *ctxt, int ifidx)
 		}
 #endif /* !ENABLE_STATS_IOCTL */
 #endif
+		// printf("send cnt(%d)\n",cnt);
 		do
 		{
 			/* tx cnt # of packets */
@@ -429,7 +430,10 @@ dpdk_get_wptr(struct mtcp_thread_context *ctxt, int ifidx, uint16_t pktsize)
 
 	/* sanity check */
 	if (unlikely(dpc->wmbufs[ifidx].len == MAX_PKT_BURST))
+	{
+		printf("unlikely(dpc->wmbufs[ifidx].len == MAX_PKT_BURST RTE_MAX_ETHPORTS(%d) num_devices_attached(%d) sanity check failed\n", RTE_MAX_ETHPORTS, num_devices_attached);
 		return NULL;
+	}
 
 	len_of_mbuf = dpc->wmbufs[ifidx].len;
 	m = dpc->wmbufs[ifidx].m_table[len_of_mbuf];

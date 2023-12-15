@@ -588,6 +588,7 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
                     goto out;
                 }
 #endif
+		// printf("pkt_len %d\n",pkt_len);
 		if ((sndlen = SendTCPPacket(mtcp, cur_stream, cur_ts,
 					    TCP_FLAG_ACK, data, pkt_len)) < 0) {
 			/* there is no available tx buf */
