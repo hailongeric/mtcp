@@ -7,7 +7,6 @@ PS=@PSIO@
 DPDK=@DPDK@
 ENFORCE_RX_IDLE=@ENFORCE_RX_IDLE@
 NETMAP=@NETMAP@
-ONVM=@ONVM@
 LRO=@LRO@
 CCP=@CCP@
 HWCSUM=@HWCSUM@
@@ -57,10 +56,6 @@ ifeq ($(LRO),1)
 GCC_OPT += -DENABLELRO
 endif
 
-ifeq ($(CCP),1)
-GCC_OPT += -DUSE_CCP
-endif
-
 ifeq ($(HWCSUM),0)
 GCC_OPT += -DDISABLE_HWCSUM
 endif
@@ -80,18 +75,6 @@ ifeq ($(NETMAP),1)
 else
 INC += -DDISABLE_NETMAP
 endif
-
-ifeq ($(ONVM),1)
-ifeq ($(RTE_TARGET),)
-$(error "Please define RTE_SDK environment variable")
-endif
-INC += -I@ONVMLIBPATH@/onvm_nflib
-INC += -I@ONVMLIBPATH@/lib
-INC += -DENABLE_ONVM
-LDFLAGS += @ONVMLIBPATH@/onvm_nflib/$(RTE_TARGET)/libonvm.a
-LDFLAGS += @ONVMLIBPATH@/lib/$(RTE_TARGET)/lib/libonvmhelper.a -lm
-endif
-
 
 # PacketShader LIBRARY and HEADER
 PS_DIR=../../io_engine

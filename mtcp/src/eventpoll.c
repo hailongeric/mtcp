@@ -11,6 +11,9 @@
 #include "tcp_in.h"
 #include "pipe.h"
 #include "debug.h"
+#ifdef EABLE_COROUTINE
+#include "schedule.h"
+#endif
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -458,12 +461,14 @@ int mtcp_epoll_wait(mctx_t mctx, int epid,
 	}
 #endif /* SPIN_BEFORE_SLEEP */
 
+#ifndef EABLE_COROUTINE
 	if (pthread_mutex_lock(&ep->epoll_lock))
 	{
 		if (errno == EDEADLK)
 			perror("mtcp_epoll_wait: epoll_lock blocked\n");
 		assert(0);
 	}
+#endif
 
 wait:
 	eq = ep->usr_queue;
@@ -477,13 +482,21 @@ wait:
 		/* signal to mtcp thread if it is sleeping */
 		if (mtcp->wakeup_flag && mtcp->is_sleeping)
 		{
+#ifdef EABLE_COROUTINE
+			lthread_cancel(mtcp->ctx->thread);
+#else
 			pthread_kill(mtcp->ctx->thread, SIGUSR1);
+#endif
 		}
 #endif
 		ep->stat.waits++;
 		ep->waiting = TRUE;
 		if (timeout > 0)
 		{
+#ifdef EABLE_COROUTINE
+			long dts;
+			struct timespec curr;
+#endif
 			struct timespec deadline;
 
 			clock_gettime(CLOCK_REALTIME, &deadline);
@@ -495,16 +508,27 @@ wait:
 				timeout -= sec * 1000;
 			}
 
-			deadline.tv_nsec += timeout * 1000000;
+			deadline.tv_nsec += timeout * 1e6;
 
-			if (deadline.tv_nsec >= 1000000000)
+			if (deadline.tv_nsec >= 1e9)
 			{
 				deadline.tv_sec++;
-				deadline.tv_nsec -= 1000000000;
+				deadline.tv_nsec -= 1e9;
 			}
 
-			// deadline.tv_sec = mtcp->cur_tv.tv_sec;
-			// deadline.tv_nsec = (mtcp->cur_tv.tv_usec + timeout * 1000) * 1000;
+// deadline.tv_sec = mtcp->cur_tv.tv_sec;
+// deadline.tv_nsec = (mtcp->cur_tv.tv_usec + timeout * 1000) * 1000;
+#ifdef EABLE_COROUTINE
+			dts = deadline.tv_sec * 1e9 + deadline.tv_nsec;
+			while (ep->waiting)
+			{
+				YieldToStack(mtcp->ctx, YIELD_REASON_EPOLL);
+				clock_gettime(CLOCK_MONOTONIC, &curr);
+				/* XXX should we handle overflow in 64bit clock? */
+				if (dts < (curr.tv_sec * 1e9 + curr.tv_nsec))
+					break;
+			}
+#else
 			ret = pthread_cond_timedwait(&ep->epoll_cond,
 										 &ep->epoll_lock, &deadline);
 			if (ret && ret != ETIMEDOUT)
@@ -515,10 +539,15 @@ wait:
 							ret, strerror(errno));
 				return -1;
 			}
+#endif
 			timeout = 0;
 		}
 		else if (timeout < 0)
 		{
+#ifdef EABLE_COROUTINE
+			while (ep->waiting)
+				YieldToStack(mtcp->ctx, YIELD_REASON_EPOLL);
+#else
 			ret = pthread_cond_wait(&ep->epoll_cond, &ep->epoll_lock);
 			if (ret)
 			{
@@ -530,14 +559,17 @@ wait:
 			}
 			// !!! hl_patch
 			timeout = 0;
+#endif
 		}
 		ep->waiting = FALSE;
 
 		if (mtcp->ctx->done || mtcp->ctx->exit || mtcp->ctx->interrupt)
 		{
 			mtcp->ctx->interrupt = FALSE;
-			// ret = pthread_cond_signal(&ep->epoll_cond);
+// ret = pthread_cond_signal(&ep->epoll_cond);
+#ifndef EABLE_COROUTINE
 			pthread_mutex_unlock(&ep->epoll_lock);
+#endif
 			errno = EINTR;
 			return -1;
 		}
@@ -631,9 +663,9 @@ wait:
 
 	if (cnt == 0 && timeout != 0)
 		goto wait;
-
+#ifndef EABLE_COROUTINE
 	pthread_mutex_unlock(&ep->epoll_lock);
-
+#endif
 	return cnt;
 }
 /*----------------------------------------------------------------------------*/

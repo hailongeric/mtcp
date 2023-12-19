@@ -57,6 +57,16 @@ mtcp_setconf(const struct mtcp_conf *conf);
 int 
 mtcp_core_affinitize(int cpu);
 
+
+#ifdef EABLE_COROUTINE
+typedef void (*mtcp_app_func_t) (void *); 
+int
+mtcp_create_app_context(mctx_t mctx, mtcp_app_func_t func, void *arg);
+
+void
+mtcp_run_app();
+#endif
+
 mctx_t 
 mtcp_create_context(int cpu);
 

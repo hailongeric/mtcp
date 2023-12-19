@@ -23,8 +23,8 @@
 #include "stat.h"
 #include "io_module.h"
 
-#ifdef ENABLE_ONVM
-#include "onvm_nflib.h"
+#ifdef EABLE_COROUTINE
+#include "lthread.h"
 #endif
 
 #ifndef TRUE
@@ -51,18 +51,6 @@
 
 #define TCP_OPT_TIMESTAMP_ENABLED       TRUE   // enabled for rtt measure
 #define TCP_OPT_SACK_ENABLED            TRUE   // only recv-side implemented
-
-/* Only use rate limiting if using CCP */
-#if USE_CCP
-#undef  RATE_LIMIT_ENABLED
-#define RATE_LIMIT_ENABLED              TRUE
-#define PACING_ENABLED                  FALSE
-// The following two logs are for debugging / experiments only, should be turned
-// off for production use
-// #define DBGCCP                                 // ccp debug messages
-// #define PROBECCP                               // print all cwnd changes, similar to tcpprobe output
-#define CC_NAME				20
-#endif
 
 #define LOCK_STREAM_QUEUE               FALSE
 #define USE_SPIN_LOCK                   TRUE
@@ -180,17 +168,6 @@ struct mtcp_config
 	/* adding multi-process support */
 	uint8_t multi_process;
 	uint8_t multi_process_is_master;
-
-#ifdef ENABLE_ONVM
-	struct onvm_nf_local_ctx *nf_local_ctx;
-	/* onvm specific args */
-	uint16_t onvm_serv;
-  	uint16_t onvm_inst;
-  	uint16_t onvm_dest;
-#endif
-#if USE_CCP
-    char     cc[CC_NAME];
-#endif
 };
 /*----------------------------------------------------------------------------*/
 struct mtcp_context
@@ -223,9 +200,6 @@ struct mtcp_manager
 	sb_manager_t rbm_snd;
 	rb_manager_t rbm_rcv;
 	struct hashtable *tcp_flow_table;
-#if USE_CCP
-	struct hashtable *tcp_sid_table;
-#endif
 
 	uint32_t s_index:24;		/* stream index */
 	socket_map_t smap;
@@ -299,11 +273,6 @@ struct mtcp_manager
 	struct time_stat rtstat;
 #endif /* NETSTAT */
 	struct io_module_func *iom;
-
-#if USE_CCP
-	int from_ccp;
-	int to_ccp;
-#endif
 };
 /*----------------------------------------------------------------------------*/
 typedef struct mtcp_manager* mtcp_manager_t;
@@ -314,7 +283,11 @@ GetMTCPManager(mctx_t mctx);
 struct mtcp_thread_context
 {
 	int cpu;
+#ifndef EABLE_COROUTINE
 	pthread_t thread;
+#else
+    lthread_t thread;
+#endif
 	uint8_t done:1, 
 			exit:1, 
 			interrupt:1;

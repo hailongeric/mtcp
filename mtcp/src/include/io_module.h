@@ -118,8 +118,6 @@ CheckIOModuleAccessPermissions();
 			current_iomodule_func = &dpdk_module_func;	\
 		else if (!strcmp(m, "netmap"))				\
 			current_iomodule_func = &netmap_module_func;	\
- 		else if (!strcmp(m, "onvm"))				\
-  			current_iomodule_func = &onvm_module_func;	\
 		else							\
 			assert(0);					\
 	}

@@ -28,20 +28,14 @@
 #include "ip_out.h"
 #include "timer.h"
 #include "debug.h"
-#if USE_CCP
-#include "ccp.h"
-#include "libccp/ccp.h"
+
+#ifdef EABLE_COROUTINE
+#include "lthread_api.h"
 #endif
 
-#ifndef DISABLE_DPDK
 /* for launching rte thread */
 #include <rte_launch.h>
 #include <rte_lcore.h>
-#endif
-
-#ifdef ENABLE_ONVM
-#include "onvm_nflib.h"
-#endif
 
 #define PS_CHUNK_SIZE 64
 #define RX_THRESH (PS_CHUNK_SIZE * 0.8)
@@ -67,17 +61,22 @@
 struct mtcp_thread_context *g_pctx[MAX_CPUS] = {0};
 struct log_thread_context *g_logctx[MAX_CPUS] = {0};
 /*----------------------------------------------------------------------------*/
+#ifdef EABLE_COROUTINE
+static lthread_t g_thread[MAX_CPUS] = {0};
+static lthread_t g_app_thread[MAX_CPUS] = {0};
+#else
 static pthread_t g_thread[MAX_CPUS] = {0};
+#endif
+
 #if defined(PKTDUMP) || (DBGMSG) || (DBGFUNC) || \
 	(STREAM) || (STATE) || (STAT) || (APP) || (EPOLL) || (DUMP_STREAM)
 static pthread_t log_thread[MAX_CPUS] = {0};
 #endif
-#if USE_CCP
-static pthread_t ccp_run_thread = 0;
-static pthread_t ccp_recv_thread[MAX_CPUS] = {0};
-#endif
 /*----------------------------------------------------------------------------*/
+#ifdef EABLE_COROUTINE
+#else
 static sem_t g_init_sem[MAX_CPUS];
+#endif
 static int running[MAX_CPUS] = {0};
 /*----------------------------------------------------------------------------*/
 mtcp_sighandler_t app_signal_handler;
@@ -95,11 +94,6 @@ void HandleSignal(int signal)
 	{
 		int core;
 		struct timespec cur_ts;
-
-#ifdef ENABLE_ONVM
-		if (current_iomodule_func == &onvm_module_func)
-			onvm_nflib_stop(CONFIG.nf_local_ctx);
-#endif
 		core = sched_getcpu();
 		clock_gettime(CLOCK_REALTIME, &cur_ts);
 
@@ -484,7 +478,40 @@ FlushEpollEvents(mtcp_manager_t mtcp, uint32_t cur_ts)
 	struct mtcp_epoll *ep = mtcp->ep;
 	struct event_queue *usrq = ep->usr_queue;
 	struct event_queue *mtcpq = ep->mtcp_queue;
+#ifdef EABLE_COROUTINE
+	if (ep->mtcp_queue->num_events > 0)
+	{
+		/* while mtcp_queue have events */
+		/* and usr_queue is not full */
+		while (mtcpq->num_events > 0 && usrq->num_events < usrq->size)
+		{
+			/* copy the event from mtcp_queue to usr_queue */
+			usrq->events[usrq->end++] = mtcpq->events[mtcpq->start++];
 
+			if (usrq->end >= usrq->size)
+				usrq->end = 0;
+			usrq->num_events++;
+
+			if (mtcpq->start >= mtcpq->size)
+				mtcpq->start = 0;
+			mtcpq->num_events--;
+		}
+	}
+
+	/* if there are pending events, wake up user */
+	if (ep->waiting && (ep->usr_queue->num_events > 0 ||
+						ep->usr_shadow_queue->num_events > 0))
+	{
+		STAT_COUNT(mtcp->runstat.rounds_epoll);
+		TRACE_EPOLL("Broadcasting events. num: %d, cur_ts: %u, prev_ts: %u\n",
+					ep->usr_queue->num_events, cur_ts, mtcp->ts_last_event);
+		mtcp->ts_last_event = cur_ts;
+		ep->stat.wakes++;
+		ep->waiting = FALSE;
+
+		YieldToApp(mtcp->ctx, TRUE);
+	}
+#else
 	pthread_mutex_lock(&ep->epoll_lock);
 	if (ep->mtcp_queue->num_events > 0)
 	{
@@ -517,6 +544,7 @@ FlushEpollEvents(mtcp_manager_t mtcp, uint32_t cur_ts)
 		pthread_cond_signal(&ep->epoll_cond);
 	}
 	pthread_mutex_unlock(&ep->epoll_lock);
+#endif
 }
 /*----------------------------------------------------------------------------*/
 static inline void
@@ -815,7 +843,15 @@ InterruptApplication(mtcp_manager_t mtcp)
 {
 	int i;
 	struct tcp_listener *listener = NULL;
+#ifdef EABLE_COROUTINE
+	/* interrupt if the mtcp_epoll_wait() is waiting */
+	if ((mtcp->ep) && (mtcp->ep->waiting))
+	{
+		mtcp->ep->waiting = FALSE;
 
+		YieldToApp(mtcp->ctx, FALSE);
+	}
+#else
 	/* interrupt if the mtcp_epoll_wait() is waiting */
 	if (mtcp->ep)
 	{
@@ -826,9 +862,18 @@ InterruptApplication(mtcp_manager_t mtcp)
 		}
 		pthread_mutex_unlock(&mtcp->ep->epoll_lock);
 	}
-
+#endif
 	/* interrupt if the accept() is waiting */
 	/* this may be a looong loop but this is called only on exit */
+
+#ifdef EABLE_COROUTINE
+	for (i = 0; i < MAX_PORT; i++)
+	{
+		listener = ListenerHTSearch(mtcp->listeners, &i);
+		if ((listener != NULL) && (!(listener->socket->opts & MTCP_NONBLOCK)))
+			YieldToApp(mtcp->ctx, FALSE);
+	}
+#else
 	for (i = 0; i < MAX_PORT; i++)
 	{
 		listener = ListenerHTSearch(mtcp->listeners, &i);
@@ -842,6 +887,7 @@ InterruptApplication(mtcp_manager_t mtcp)
 			pthread_mutex_unlock(&listener->accept_lock);
 		}
 	}
+#endif
 }
 
 // static unsigned long dpdk_run_look_counts = 0;
@@ -954,6 +1000,12 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 			/* hadnle stream queues  */
 			// printf("HandleApplicationCalls\n");
 			HandleApplicationCalls(mtcp, ts);
+#ifdef EABLE_COROUTINE
+		}
+		else
+		{
+			YieldToApp(ctx, TRUE);
+#endif
 		}
 
 		WritePacketsToChunks(mtcp, ts);
@@ -1050,15 +1102,6 @@ InitializeMTCPManager(struct mtcp_thread_context *ctx)
 		return NULL;
 	}
 
-#if USE_CCP
-	mtcp->tcp_sid_table = CreateHashtable(HashSID, EqualSID, NUM_BINS_FLOWS);
-	if (!mtcp->tcp_sid_table)
-	{
-		CTRACE_ERROR("Failed to allocate tcp sid lookup table.\n");
-		return NULL;
-	}
-#endif
-
 	mtcp->listeners = CreateHashtable(HashListener, EqualListener, NUM_BINS_LISTENERS);
 	if (!mtcp->listeners)
 	{
@@ -1067,7 +1110,7 @@ InitializeMTCPManager(struct mtcp_thread_context *ctx)
 	}
 
 	mtcp->ctx = ctx;
-#if !defined(DISABLE_DPDK) && !ENABLE_ONVM
+#if !defined(DISABLE_DPDK)
 	char pool_name[RTE_MEMPOOL_NAMESIZE];
 	sprintf(pool_name, "flow_pool_%d", ctx->cpu);
 	mtcp->flow_pool = MPCreate(pool_name, sizeof(tcp_stream),
@@ -1239,73 +1282,35 @@ InitializeMTCPManager(struct mtcp_thread_context *ctx)
 	return mtcp;
 }
 /*----------------------------------------------------------------------------*/
-#if USE_CCP
-
-uint32_t libstartccp_run_forever(const char *alg_to_run, uint32_t log_fd);
-
-static void *
-CCPRunThread(void *arg)
+#ifdef EABLE_COROUTINE
+static void
+MTCPRunThread(void *arg)
 {
-	// Add ipc argument (always unix, so no need for user to provide manually)
-	char args[1024] = {0};
-	int arglen = strlen(CONFIG.cc) - 1;
-	strncpy(args, CONFIG.cc, arglen);
-	strncpy(args + arglen, " --ipc=unix", 11);
-	args[arglen + 11] = '\0';
+	int cpu;
+	struct mtcp_thread_context *ctx;
 
-	// Open fd for log file
-	FILE *ccp_log = fopen("cc.log", "w");
-	if (ccp_log == NULL)
-	{
-		perror("fopen cc.log");
-		return 0;
-	}
-	TRACE_CCP("starting ccp thread with args: %s\n", args);
-	TRACE_CCP("printing output to ./cc.log\n");
-	libstartccp_run_forever(args, fileno(ccp_log));
+	ctx = (struct mtcp_thread_context *)arg;
+	cpu = ctx->cpu;
 
-	fclose(ccp_log);
+	/* start the main loop */
+	/* XXX find a way to encapsulate this */
+	lthread_detach();
+	RunMainLoop(ctx);
 
-	return 0;
+	struct mtcp_context m;
+	m.cpu = cpu;
+	mtcp_free_context(&m);
+
+	/* destroy hash tables */
+	DestroyHashtable(g_mtcp[cpu]->tcp_flow_table);
+	DestroyHashtable(g_mtcp[cpu]->listeners);
+
+	TRACE_DBG("MTCP thread %d finished.\n", ctx->cpu);
+
+	/* XXX find a way to encapsulate this */
+	lthread_exit(NULL);
 }
-
-static void *
-CCPRecvLoopThread(void *arg)
-{
-	mtcp_manager_t mtcp = (mtcp_manager_t)arg;
-	mtcp_thread_context_t ctx = mtcp->ctx;
-
-	int cpu = ctx->cpu;
-	mtcp_core_affinitize(cpu);
-
-	TRACE_CCP("ccp recv loop thread started on cpu %d\n", cpu);
-
-	char recvBuf[CCP_MAX_MSG_SIZE];
-	int bytes_recvd;
-	while (!ctx->done && !ctx->exit)
-	{
-		do
-		{
-			bytes_recvd = recvfrom(mtcp->from_ccp, recvBuf, CCP_MAX_MSG_SIZE, 0, NULL, NULL);
-			if (bytes_recvd <= 0)
-			{
-				if (bytes_recvd < 0)
-				{
-					TRACE_ERROR("recv returned %d\n", bytes_recvd);
-				}
-				break;
-			}
-			if (!mtcp->to_ccp)
-			{
-				setup_ccp_send_socket(mtcp);
-			}
-			ccp_read_msg(recvBuf, bytes_recvd);
-		} while (1);
-	}
-	return 0;
-}
-#endif
-/*----------------------------------------------------------------------------*/
+#else
 static void *
 MTCPRunThread(void *arg)
 {
@@ -1376,20 +1381,6 @@ MTCPRunThread(void *arg)
 	g_pctx[cpu] = ctx;
 	mlockall(MCL_CURRENT);
 
-#if USE_CCP
-	setup_ccp_connection(mtcp);
-
-	if (cpu == 0 && pthread_create(&ccp_run_thread, NULL, CCPRunThread, (void *)mtcp) != 0)
-	{
-		TRACE_ERROR("Failed to create thread running CCP on cpu 0");
-	}
-	if (pthread_create(&ccp_recv_thread[cpu], NULL, CCPRecvLoopThread, (void *)mtcp) != 0)
-	{
-		TRACE_ERROR("Failed to create thread for CCP receive loop on cpu %d\n", cpu);
-		return NULL;
-	}
-#endif
-
 	// attach (nic device, queue)
 	working = AttachDevice(ctx);
 	if (working != 0)
@@ -1412,15 +1403,13 @@ MTCPRunThread(void *arg)
 	mtcp_free_context(&m);
 	/* destroy hash tables */
 	DestroyHashtable(g_mtcp[cpu]->tcp_flow_table);
-#if USE_CCP
-	DestroyHashtable(g_mtcp[cpu]->tcp_sid_table);
-#endif
 	DestroyHashtable(g_mtcp[cpu]->listeners);
 
 	TRACE_DBG("MTCP thread %d finished.\n", ctx->cpu);
 
 	return 0;
 }
+#endif
 /*----------------------------------------------------------------------------*/
 #ifndef DISABLE_DPDK
 int MTCPDPDKRunThread(void *arg)
@@ -1430,6 +1419,29 @@ int MTCPDPDKRunThread(void *arg)
 }
 #endif
 /*----------------------------------------------------------------------------*/
+#ifdef EABLE_COROUTINE
+int mtcp_create_app_context(mctx_t mctx, lthread_func_t app_func, void *arg)
+{
+	int temp;
+
+	if ((temp = lthread_create(&g_app_thread[mctx->cpu], mctx->cpu, app_func, arg)) != 0)
+	{
+		TRACE_INFO("[CPU%d] failed to create application context (reason: %s)\n",
+				   mctx->cpu, strerror(temp));
+		return -1;
+	}
+
+	lthread_set_affinity(mctx->cpu);
+
+	return 0;
+}
+
+void mtcp_run_app(mctx_t mctx)
+{
+	lthread_run();
+}
+#endif
+
 mctx_t
 mtcp_create_context(int cpu)
 {
@@ -1451,13 +1463,15 @@ mtcp_create_context(int cpu)
 					__FUNCTION__);
 		return NULL;
 	}
-
+#ifdef EABLE_COROUTINE
+#else
 	ret = sem_init(&g_init_sem[cpu], 0, 0);
 	if (ret)
 	{
 		TRACE_ERROR("Failed initialize init_sem.\n");
 		return NULL;
 	}
+#endif
 
 	mctx = (mctx_t)calloc(1, sizeof(struct mtcp_context));
 	if (!mctx)
@@ -1467,6 +1481,32 @@ mtcp_create_context(int cpu)
 	}
 	mctx->cpu = cpu;
 
+	// 	/* initialize logger */
+	// 	g_logctx[cpu] = (struct log_thread_context *)
+	// 		calloc(1, sizeof(struct log_thread_context));
+	// 	if (!g_logctx[cpu])
+	// 	{
+	// 		perror("calloc");
+	// 		TRACE_ERROR("Failed to allocate memory for log thread context.\n");
+	// 		free(mctx);
+	// 		return NULL;
+	// 	}
+	// 	InitLogThreadContext(g_logctx[cpu], cpu);
+	// #if defined(PKTDUMP) || (DBGMSG) || (DBGFUNC) ||
+	// 	(STREAM) || (STATE) || (STAT) || (APP) ||
+	// 	(EPOLL) || (DUMP_STREAM)
+	// 	if (pthread_create(&log_thread[cpu],
+	// 					   NULL, ThreadLogMain, (void *)g_logctx[cpu]))
+	// 	{
+	// 		perror("pthread_create");
+	// 		TRACE_ERROR("Failed to create log thread\n");
+	// 		free(g_logctx[cpu]);
+	// 		free(mctx);
+	// 		return NULL;
+	// 	}
+	// #endif
+
+#ifdef ENABLE_LOGGER
 	/* initialize logger */
 	g_logctx[cpu] = (struct log_thread_context *)
 		calloc(1, sizeof(struct log_thread_context));
@@ -1478,9 +1518,7 @@ mtcp_create_context(int cpu)
 		return NULL;
 	}
 	InitLogThreadContext(g_logctx[cpu], cpu);
-#if defined(PKTDUMP) || (DBGMSG) || (DBGFUNC) || \
-	(STREAM) || (STATE) || (STAT) || (APP) ||    \
-	(EPOLL) || (DUMP_STREAM)
+
 	if (pthread_create(&log_thread[cpu],
 					   NULL, ThreadLogMain, (void *)g_logctx[cpu]))
 	{
@@ -1491,41 +1529,127 @@ mtcp_create_context(int cpu)
 		return NULL;
 	}
 #endif
-#ifndef DISABLE_DPDK
-	/* Wake up mTCP threads (wake up I/O threads) */
-	if (current_iomodule_func == &dpdk_module_func)
+
+	// #ifndef DISABLE_DPDK
+	// 	/* Wake up mTCP threads (wake up I/O threads) */
+
+	// 		int master;
+	// 		master = rte_get_main_lcore();
+
+	// 		if (master == whichCoreID(cpu))
+	// 		{
+	// 			// lcore_config[master].ret = 0;
+	// 			// lcore_config[master].state = FINISHED;
+
+	// 			if (pthread_create(&g_thread[cpu],
+	// 							   NULL, MTCPRunThread, (void *)mctx) != 0)
+	// 			{
+	// 				TRACE_ERROR("pthread_create of mtcp thread failed!\n");
+	// 				return NULL;
+	// 			}
+	// 		}
+	// 		else
+	// 			rte_eal_remote_launch(MTCPDPDKRunThread, mctx, whichCoreID(cpu));
+
+	// #endif
+
+	// 		if (pthread_create(&g_thread[cpu],
+	// 						   NULL, MTCPRunThread, (void *)mctx) != 0)
+	// 		{
+	// 			TRACE_ERROR("pthread_create of mtcp thread failed!\n");
+	// 			return NULL;
+	// 		}
+
+	// 	sem_wait(&g_init_sem[cpu]);
+	// 	sem_destroy(&g_init_sem[cpu]);
+
+#ifdef EABLE_COROUTINE
+	int working;
+	struct mtcp_manager *mtcp;
+	struct mtcp_thread_context *ctx;
+
+	/* memory alloc after core affinitization would use local memory
+	   most time */
+	ctx = calloc(1, sizeof(*ctx));
+	if (!ctx)
 	{
-		int master;
-		master = rte_get_main_lcore();
-
-		if (master == whichCoreID(cpu))
-		{
-			// lcore_config[master].ret = 0;
-			// lcore_config[master].state = FINISHED;
-
-			if (pthread_create(&g_thread[cpu],
-							   NULL, MTCPRunThread, (void *)mctx) != 0)
-			{
-				TRACE_ERROR("pthread_create of mtcp thread failed!\n");
-				return NULL;
-			}
-		}
-		else
-			rte_eal_remote_launch(MTCPDPDKRunThread, mctx, whichCoreID(cpu));
+		perror("calloc");
+		TRACE_ERROR("Failed to calloc mtcp context.\n");
+		exit(-1);
 	}
-	else
-#endif
+
+	ctx->thread = lthread_current();
+	ctx->cpu = cpu;
+	mtcp = ctx->mtcp_manager = InitializeMTCPManager(ctx);
+	if (!mtcp)
 	{
-		if (pthread_create(&g_thread[cpu],
-						   NULL, MTCPRunThread, (void *)mctx) != 0)
-		{
-			TRACE_ERROR("pthread_create of mtcp thread failed!\n");
-			return NULL;
-		}
+		TRACE_ERROR("Failed to initialize mtcp manager.\n");
+		exit(-1);
 	}
 
+	/* assign mtcp context's underlying I/O module */
+	mtcp->iom = current_iomodule_func;
+
+	/* I/O initializing */
+	mtcp->iom->init_handle(ctx);
+
+	if (pthread_mutex_init(&ctx->smap_lock, NULL))
+	{
+		perror("pthread_mutex_init of ctx->smap_lock\n");
+		exit(-1);
+	}
+
+	if (pthread_mutex_init(&ctx->flow_pool_lock, NULL))
+	{
+		perror("pthread_mutex_init of ctx->flow_pool_lock\n");
+		exit(-1);
+	}
+
+	if (pthread_mutex_init(&ctx->socket_pool_lock, NULL))
+	{
+		perror("pthread_mutex_init of ctx->socket_pool_lock\n");
+		exit(-1);
+	}
+
+	SQ_LOCK_INIT(&ctx->connect_lock, "ctx->connect_lock", exit(-1));
+	SQ_LOCK_INIT(&ctx->close_lock, "ctx->close_lock", exit(-1));
+	SQ_LOCK_INIT(&ctx->reset_lock, "ctx->reset_lock", exit(-1));
+	SQ_LOCK_INIT(&ctx->sendq_lock, "ctx->sendq_lock", exit(-1));
+	SQ_LOCK_INIT(&ctx->ackq_lock, "ctx->ackq_lock", exit(-1));
+	SQ_LOCK_INIT(&ctx->destroyq_lock, "ctx->destroyq_lock", exit(-1));
+
+	/* remember this context pointer for signal processing */
+	g_pctx[cpu] = ctx;
+	mlockall(MCL_CURRENT);
+
+	// attach (nic device, queue)
+	working = AttachDevice(ctx);
+	if (working != 0)
+	{
+		perror("attach");
+		return NULL;
+	}
+
+	TRACE_DBG("CPU %d: initialization finished.\n", cpu);
+
+	fprintf(stderr, "CPU %d: initialization finished.\n", cpu);
+
+	if (lthread_create(&g_thread[cpu],
+					   cpu, (lthread_func_t)MTCPRunThread, (void *)ctx) != 0)
+	{
+		TRACE_ERROR("lthread_create of mtcp thread failed!\n");
+		return NULL;
+	}
+#else
+	if (pthread_create(&g_thread[cpu],
+					   NULL, MTCPRunThread, (void *)mctx) != 0)
+	{
+		TRACE_ERROR("pthread_create of mtcp thread failed!\n");
+		return NULL;
+	}
 	sem_wait(&g_init_sem[cpu]);
 	sem_destroy(&g_init_sem[cpu]);
+#endif
 
 	running[cpu] = TRUE;
 
@@ -1580,6 +1704,13 @@ void mtcp_free_context(mctx_t mctx)
 	ctx->done = 1;
 
 	// pthread_kill(g_thread[mctx->cpu], SIGINT);
+
+#ifdef EABLE_COROUTINE
+	lthread_join(g_thread[mctx->cpu], NULL);
+#else
+	pthread_join(g_thread[mctx->cpu], NULL);
+#endif
+
 	TRACE_INFO("MTCP thread %d joined.\n", mctx->cpu);
 	running[mctx->cpu] = FALSE;
 
@@ -1604,13 +1735,6 @@ void mtcp_free_context(mctx_t mctx)
 #endif
 	fclose(mtcp->log_fp);
 	TRACE_LOG("Log thread %d joined.\n", mctx->cpu);
-
-#if USE_CCP
-	destroy_ccp_connection(mtcp);
-	close(mtcp->from_ccp);
-	close(mtcp->to_ccp);
-	TRACE_CCP("CCP thread %d joined.\n", mctx->cpu);
-#endif
 
 	if (mtcp->connectq)
 	{
@@ -1844,6 +1968,25 @@ int mtcp_init(const char *config_file)
 void mtcp_destroy()
 {
 	int i;
+
+#ifdef EABLE_COROUTINE
+
+	/* wait until all threads are closed */
+	for (i = 0; i < num_cpus; i++)
+	{
+		if (running[i])
+		{
+			lthread_join(g_thread[i], NULL);
+		}
+	}
+
+	for (i = 0; i < CONFIG.eths_num; i++)
+		DestroyAddressPool(ap[i]);
+
+	TRACE_INFO("All MTCP threads are joined.\n");
+
+#else
+
 #ifndef DISABLE_DPDK
 	int master = rte_get_main_lcore();
 #endif
@@ -1870,10 +2013,7 @@ void mtcp_destroy()
 	mpz_clear(CONFIG._cpumask);
 #endif
 
-#ifdef ENABLE_ONVM
-	onvm_nflib_stop(CONFIG.nf_local_ctx);
-#endif
-
 	TRACE_INFO("All MTCP threads are joined.\n");
+#endif
 }
 /*----------------------------------------------------------------------------*/

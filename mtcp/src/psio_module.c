@@ -4,7 +4,6 @@
 /* for mtcp related def'ns */
 #include "mtcp.h"
 /* for psio related def'ns */
-#include "ps.h"
 /* for errno */
 #include <errno.h>
 /* for logging */

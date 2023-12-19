@@ -655,6 +655,17 @@ int mtcp_accept(mctx_t mctx, int sockid, struct sockaddr *addr, socklen_t *addrl
 		}
 		else
 		{
+#ifdef EABLE_COROUTINE
+			while ((accepted = StreamDequeue(listener->acceptq)) == NULL)
+			{
+				lthread_yield();
+				if (mtcp->ctx->done || mtcp->ctx->exit)
+				{
+					errno = EINTR;
+					return -1;
+				}
+			}
+#else
 			pthread_mutex_lock(&listener->accept_lock);
 			while ((accepted = StreamDequeue(listener->acceptq)) == NULL)
 			{
@@ -668,6 +679,7 @@ int mtcp_accept(mctx_t mctx, int sockid, struct sockaddr *addr, socklen_t *addrl
 				}
 			}
 			pthread_mutex_unlock(&listener->accept_lock);
+#endif
 		}
 	}
 
@@ -1056,10 +1068,11 @@ CloseListeningSocket(mctx_t mctx, int sockid)
 		DestroyStreamQueue(listener->acceptq);
 		listener->acceptq = NULL;
 	}
-
+#ifndef EABLE_COROUTINE
 	pthread_mutex_lock(&listener->accept_lock);
 	pthread_cond_signal(&listener->accept_cond);
 	pthread_mutex_unlock(&listener->accept_lock);
+#endif
 
 	pthread_cond_destroy(&listener->accept_cond);
 	pthread_mutex_destroy(&listener->accept_lock);
@@ -1367,8 +1380,9 @@ mtcp_recv(mctx_t mctx, int sockid, char *buf, size_t len, int flags)
 			return -1;
 		}
 	}
-
+#ifndef EABLE_COROUTINE
 	SBUF_LOCK(&rcvvar->read_lock);
+#endif
 #if BLOCKING_SUPPORT
 	if (!(socket->opts & MTCP_NONBLOCK))
 	{
@@ -1394,7 +1408,9 @@ mtcp_recv(mctx_t mctx, int sockid, char *buf, size_t len, int flags)
 		ret = PeekForUser(mtcp, cur_stream, buf, len);
 		break;
 	default:
+#ifndef EABLE_COROUTINE
 		SBUF_UNLOCK(&rcvvar->read_lock);
+#endif
 		ret = -1;
 		errno = EINVAL;
 		return ret;
@@ -1416,9 +1432,9 @@ mtcp_recv(mctx_t mctx, int sockid, char *buf, size_t len, int flags)
 	{
 		event_remaining = TRUE;
 	}
-
+#ifndef EABLE_COROUTINE
 	SBUF_UNLOCK(&rcvvar->read_lock);
-
+#endif
 	if (event_remaining)
 	{
 		if (socket->epoll)
@@ -1518,8 +1534,9 @@ int mtcp_readv(mctx_t mctx, int sockid, const struct iovec *iov, int numIOV)
 			return -1;
 		}
 	}
-
+#ifndef EABLE_COROUTINE
 	SBUF_LOCK(&rcvvar->read_lock);
+#endif
 #if BLOCKING_SUPPORT
 	if (!(socket->opts & MTCP_NONBLOCK))
 	{
@@ -1569,9 +1586,9 @@ int mtcp_readv(mctx_t mctx, int sockid, const struct iovec *iov, int numIOV)
 	{
 		event_remaining = TRUE;
 	}
-
+#ifndef EABLE_COROUTINE
 	SBUF_UNLOCK(&rcvvar->read_lock);
-
+#endif
 	if (event_remaining)
 	{
 		if ((socket->epoll & MTCP_EPOLLIN) && !(socket->epoll & MTCP_EPOLLET))
@@ -1708,8 +1725,9 @@ mtcp_write(mctx_t mctx, int sockid, const char *buf, size_t len)
 	}
 
 	sndvar = cur_stream->sndvar;
-
+#ifndef EABLE_COROUTINE
 	SBUF_LOCK(&sndvar->write_lock);
+#endif
 #if BLOCKING_SUPPORT
 	if (!(socket->opts & MTCP_NONBLOCK))
 	{
@@ -1730,9 +1748,9 @@ mtcp_write(mctx_t mctx, int sockid, const char *buf, size_t len)
 #endif
 
 	ret = CopyFromUser(mtcp, cur_stream, buf, len);
-
+#ifndef EABLE_COROUTINE
 	SBUF_UNLOCK(&sndvar->write_lock);
-
+#endif
 	if (ret > 0 && !(sndvar->on_sendq || sndvar->on_send_list))
 	{
 		SQ_LOCK(&mtcp->ctx->sendq_lock);
@@ -1820,7 +1838,9 @@ int mtcp_writev(mctx_t mctx, int sockid, const struct iovec *iov, int numIOV)
 	}
 
 	sndvar = cur_stream->sndvar;
+#ifndef EABLE_COROUTINE
 	SBUF_LOCK(&sndvar->write_lock);
+#endif
 #if BLOCKING_SUPPORT
 	if (!(socket->opts & MTCP_NONBLOCK))
 	{
@@ -1856,8 +1876,9 @@ int mtcp_writev(mctx_t mctx, int sockid, const struct iovec *iov, int numIOV)
 		if (ret < iov[i].iov_len)
 			break;
 	}
+#ifndef EABLE_COROUTINE
 	SBUF_UNLOCK(&sndvar->write_lock);
-
+#endif
 	if (to_write > 0 && !(sndvar->on_sendq || sndvar->on_send_list))
 	{
 		SQ_LOCK(&mtcp->ctx->sendq_lock);

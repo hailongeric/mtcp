@@ -8,41 +8,46 @@
 #include "logger.h"
 
 /*----------------------------------------------------------------------------*/
-void
-flush_log_data(mtcp_manager_t mtcp)
+void flush_log_data(mtcp_manager_t mtcp)
 {
 	int ret = 0;
-	if (mtcp->w_buffer) {
+	if (mtcp->w_buffer)
+	{
 		EnqueueJobBuffer(mtcp->logger, mtcp->w_buffer);
 		ret = write(mtcp->sp_fd, "A", 1);
-		if (ret != 1) {
+		if (ret != 1)
+		{
 			TRACE_INFO("Failed to flush logs in the buffer.\n");
 			perror("write() for pipe");
 		}
 	}
 }
 /*----------------------------------------------------------------------------*/
-void
-thread_printf(mtcp_manager_t mtcp, FILE* f_idx, const char* _Format, ...) 
+void thread_printf(mtcp_manager_t mtcp, FILE *f_idx, const char *_Format, ...)
 {
 	va_list argptr;
 	va_start(argptr, _Format);
 
-	#define PRINT_LIMIT 4096
+#define PRINT_LIMIT 4096
 	int len;
 	log_buff *wbuf;
 
 	assert(f_idx != NULL);
-
+#ifdef EABLE_COROUTINE
+#else
 	pthread_mutex_lock(&mtcp->logger->mutex);
+#endif
 	wbuf = mtcp->w_buffer;
-	if (wbuf && (wbuf->buff_len + PRINT_LIMIT > LOG_BUFF_SIZE)) {
+	if (wbuf && (wbuf->buff_len + PRINT_LIMIT > LOG_BUFF_SIZE))
+	{
 		flush_log_data(mtcp);
 		wbuf = NULL;
 	}
 
-	if (!wbuf) {
-		do { // out of free buffers!!
+	if (!wbuf)
+	{
+		do
+		{ // out of free buffers!!
 			wbuf = DequeueFreeBuffer(mtcp->logger);
 			assert(wbuf);
 		} while (!wbuf);
@@ -51,17 +56,17 @@ thread_printf(mtcp_manager_t mtcp, FILE* f_idx, const char* _Format, ...)
 		wbuf->fid = f_idx;
 		mtcp->w_buffer = wbuf;
 	}
-	
+
 	len = vsnprintf(wbuf->buff + wbuf->buff_len, PRINT_LIMIT, _Format, argptr);
 	wbuf->buff_len += len;
+#ifdef EABLE_COROUTINE
+#else
 	pthread_mutex_unlock(&mtcp->logger->mutex);
-
+#endif
 	va_end(argptr);
-
 }
 /*----------------------------------------------------------------------------*/
-void
-DumpPacket(mtcp_manager_t mtcp, char *buf, int len, char *step, int ifindex)
+void DumpPacket(mtcp_manager_t mtcp, char *buf, int len, char *step, int ifindex)
 {
 	struct ethhdr *ethh;
 	struct iphdr *iph;
@@ -75,20 +80,21 @@ DumpPacket(mtcp_manager_t mtcp, char *buf, int len, char *step, int ifindex)
 		thread_printf(mtcp, mtcp->log_fp, "%s ? %u", step, mtcp->cur_ts);
 
 	ethh = (struct ethhdr *)buf;
-	if (ntohs(ethh->h_proto) != ETH_P_IP) {
+	if (ntohs(ethh->h_proto) != ETH_P_IP)
+	{
 		thread_printf(mtcp, mtcp->log_fp, "%02X:%02X:%02X:%02X:%02X:%02X -> %02X:%02X:%02X:%02X:%02X:%02X ",
-				ethh->h_source[0],
-				ethh->h_source[1],
-				ethh->h_source[2],
-				ethh->h_source[3],
-				ethh->h_source[4],
-				ethh->h_source[5],
-				ethh->h_dest[0],
-				ethh->h_dest[1],
-				ethh->h_dest[2],
-				ethh->h_dest[3],
-				ethh->h_dest[4],
-				ethh->h_dest[5]);
+					  ethh->h_source[0],
+					  ethh->h_source[1],
+					  ethh->h_source[2],
+					  ethh->h_source[3],
+					  ethh->h_source[4],
+					  ethh->h_source[5],
+					  ethh->h_dest[0],
+					  ethh->h_dest[1],
+					  ethh->h_dest[2],
+					  ethh->h_dest[3],
+					  ethh->h_dest[4],
+					  ethh->h_dest[5]);
 
 		thread_printf(mtcp, mtcp->log_fp, "protocol %04hx  ", ntohs(ethh->h_proto));
 		goto done;
@@ -115,21 +121,23 @@ DumpPacket(mtcp_manager_t mtcp, char *buf, int len, char *step, int ifindex)
 	thread_printf(mtcp, mtcp->log_fp, " IP_ID=%d", ntohs(iph->id));
 	thread_printf(mtcp, mtcp->log_fp, " TTL=%d ", iph->ttl);
 
-	if (ip_fast_csum(iph, iph->ihl)) {
+	if (ip_fast_csum(iph, iph->ihl))
+	{
 		__sum16 org_csum, correct_csum;
-		
+
 		org_csum = iph->check;
 		iph->check = 0;
 		correct_csum = ip_fast_csum(iph, iph->ihl);
 		thread_printf(mtcp, mtcp->log_fp, "(bad checksum %04x should be %04x) ",
-				ntohs(org_csum), ntohs(correct_csum));
+					  ntohs(org_csum), ntohs(correct_csum));
 		iph->check = org_csum;
 	}
 
-	switch (iph->protocol) {
+	switch (iph->protocol)
+	{
 	case IPPROTO_TCP:
 		thread_printf(mtcp, mtcp->log_fp, "TCP ");
-		
+
 		if (tcph->syn)
 			thread_printf(mtcp, mtcp->log_fp, "S ");
 		if (tcph->fin)
@@ -155,8 +163,7 @@ done:
 	thread_printf(mtcp, mtcp->log_fp, "len=%d\n", len);
 }
 /*----------------------------------------------------------------------------*/
-void
-DumpIPPacket(mtcp_manager_t mtcp, const struct iphdr *iph, int len)
+void DumpIPPacket(mtcp_manager_t mtcp, const struct iphdr *iph, int len)
 {
 	struct udphdr *udph;
 	struct tcphdr *tcph;
@@ -180,14 +187,16 @@ DumpIPPacket(mtcp_manager_t mtcp, const struct iphdr *iph, int len)
 	thread_printf(mtcp, mtcp->log_fp, " IP_ID=%d", ntohs(iph->id));
 	thread_printf(mtcp, mtcp->log_fp, " TTL=%d ", iph->ttl);
 
-	if (ip_fast_csum(iph, iph->ihl)) {
+	if (ip_fast_csum(iph, iph->ihl))
+	{
 		thread_printf(mtcp, mtcp->log_fp, "(bad checksum) ");
 	}
 
-	switch (iph->protocol) {
+	switch (iph->protocol)
+	{
 	case IPPROTO_TCP:
 		thread_printf(mtcp, mtcp->log_fp, "TCP ");
-		
+
 		if (tcph->syn)
 			thread_printf(mtcp, mtcp->log_fp, "S ");
 		if (tcph->fin)
@@ -213,8 +222,7 @@ done:
 	thread_printf(mtcp, mtcp->log_fp, "len=%d\n", len);
 }
 /*----------------------------------------------------------------------------*/
-void
-DumpIPPacketToFile(FILE *fout, const struct iphdr *iph, int len)
+void DumpIPPacketToFile(FILE *fout, const struct iphdr *iph, int len)
 {
 	struct udphdr *udph;
 	struct tcphdr *tcph;
@@ -238,14 +246,16 @@ DumpIPPacketToFile(FILE *fout, const struct iphdr *iph, int len)
 	fprintf(fout, " IP_ID=%d", ntohs(iph->id));
 	fprintf(fout, " TTL=%d ", iph->ttl);
 
-	if (ip_fast_csum(iph, iph->ihl)) {
+	if (ip_fast_csum(iph, iph->ihl))
+	{
 		fprintf(fout, "(bad checksum) ");
 	}
 
-	switch (iph->protocol) {
+	switch (iph->protocol)
+	{
 	case IPPROTO_TCP:
 		fprintf(fout, "TCP ");
-		
+
 		if (tcph->syn)
 			fprintf(fout, "S ");
 		if (tcph->fin)

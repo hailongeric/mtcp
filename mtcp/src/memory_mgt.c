@@ -16,7 +16,7 @@ typedef struct tag_mem_chunk
 /*----------------------------------------------------------------------------*/
 typedef mem_chunk *mem_chunk_t;
 /*----------------------------------------------------------------------------*/
-#if defined(DISABLE_DPDK) || defined(ENABLE_ONVM)
+#if defined(DISABLE_DPDK)
 typedef struct mem_pool
 {
 	u_char *mp_startptr;      /* start pointer */
