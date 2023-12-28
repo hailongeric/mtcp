@@ -197,6 +197,7 @@ int StreamEnqueue(stream_queue_t sq, tcp_stream *stream)
 		// unsigned long time = 0;
 		// asm volatile("MRS %0, PMCCNTR_EL0" : "=r"(time));
 		// printf("mtcp_write stream (%ld)\n", time);
+		// printf("en:h(%d)-t(%d) cwnd(%d)\n", sq->_head, sq->_tail,stream->sndvar->cwnd);
 		return 0;
 	}
 
@@ -215,6 +216,7 @@ StreamDequeue(stream_queue_t sq)
 		// unsigned long time = 0;
 		// asm volatile("MRS %0, PMCCNTR_EL0" : "=r"(time));
 		// printf("handle_application_call sendstream (%ld)\n", time);
+		// printf("de:h(%d)-t(%d)\n", sq->_head, sq->_tail);
 		tcp_stream *stream = sq->_q[h];
 		StreamMemoryBarrier(sq->_q[h], sq->_head);
 		sq->_head = NextIndex(sq, h);

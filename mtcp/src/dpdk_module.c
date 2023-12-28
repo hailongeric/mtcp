@@ -32,8 +32,6 @@
 /* for ip defragging */
 #include <rte_ip_frag.h>
 #endif
-/* for ioctl funcs */
-#include <dpdk_iface_common.h>
 /* for retrieving rte version(s) */
 #include <rte_version.h>
 /*----------------------------------------------------------------------------*/
@@ -89,11 +87,7 @@
 
 #define ETHER_IFG 12
 #define ETHER_PREAMBLE 8
-#if RTE_VERSION < RTE_VERSION_NUM(19, 8, 0, 0)
-#define ETHER_OVR (ETHER_CRC_LEN + ETHER_PREAMBLE + ETHER_IFG)
-#else
 #define ETHER_OVR (RTE_ETHER_CRC_LEN + ETHER_PREAMBLE + ETHER_IFG)
-#endif
 
 static const uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
 static const uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
@@ -149,10 +143,7 @@ static struct rte_eth_conf port_conf = {
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
-
-		// #if RTE_VERSION >= RTE_VERSION_NUM(18, 5, 0, 0)
 		.offloads = (DEV_TX_OFFLOAD_IPV4_CKSUM | DEV_TX_OFFLOAD_UDP_CKSUM | DEV_TX_OFFLOAD_TCP_CKSUM | DEV_TX_OFFLOAD_MULTI_SEGS),
-		// #endif
 	},
 };
 
@@ -173,13 +164,6 @@ static const struct rte_eth_txconf tx_conf = {
 	},
 	.tx_free_thresh = 0, /* Use PMD default values */
 	.tx_rs_thresh = 0,	 /* Use PMD default values */
-#if RTE_VERSION < RTE_VERSION_NUM(18, 5, 0, 0)
-	/*
-	 * As the example won't handle mult-segments and offload cases,
-	 * set the flag by default.
-	 */
-	.txq_flags = 0x0,
-#endif
 };
 
 struct mbuf_table
@@ -382,12 +366,11 @@ int dpdk_send_pkts(struct mtcp_thread_context *ctxt, int ifidx)
 		}
 #endif /* !ENABLE_STATS_IOCTL */
 #endif
-		// printf("send cnt(%d)\n",cnt);
+		// printf("send cnt(%d)\n", cnt);
 		do
 		{
 			/* tx cnt # of packets */
-			ret = rte_eth_tx_burst(portid, ctxt->cpu,
-								   pkts, cnt);
+			ret = rte_eth_tx_burst(portid, ctxt->cpu, pkts, cnt);
 			pkts += ret;
 			cnt -= ret;
 			/* if not all pkts were sent... then repeat the cycle */
@@ -450,6 +433,7 @@ dpdk_get_wptr(struct mtcp_thread_context *ctxt, int ifidx, uint16_t pktsize)
 
 	/* increment the len_of_mbuf var */
 	dpc->wmbufs[ifidx].len = len_of_mbuf + 1;
+	// printf("idx(%d)%p\n", len_of_mbuf, ptr);
 
 	return (uint8_t *)ptr;
 }

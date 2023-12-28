@@ -23,19 +23,11 @@ ProcessPacket(mtcp_manager_t mtcp, const int ifidx,
 	mtcp->nstat.rx_bytes[ifidx] += len + 24;
 #endif /* NETSTAT */
 
-#if 0
-	/* ignore mac address which is not for current interface */
-	int i;
-	for (i = 0; i < 6; i ++) {
-		if (ethh->h_dest[i] != CONFIG.eths[ifidx].haddr[i]) {
-			return FALSE;
-		}
-	}
-#endif
-
 	if (ip_proto == ETH_P_IP) {
 		/* process ipv4 packet */
+		// printf("[+]3*******************cwnd(%d)\n",*((int*)0x10b4b3b38));
 		ret = ProcessIPv4Packet(mtcp, cur_ts, ifidx, pkt_data, len);
+		// printf("[+]4*******************cwnd(%d)\n",*((int*)0x10b4b3b38));
 
 	} else if (ip_proto == ETH_P_ARP) {
 		ProcessARPPacket(mtcp, cur_ts, ifidx, pkt_data, len);

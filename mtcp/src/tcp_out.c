@@ -461,6 +461,7 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 #endif
 
 		remaining_window = MIN(sndvar->cwnd, sndvar->peer_wnd) - (seq - sndvar->snd_una);
+		// printf("remaining_window(%d) sndvar->cwnd(%d) sndvar->peer_wnd (%d) mss(%d)\n", remaining_window, sndvar->cwnd, sndvar->peer_wnd, sndvar->mss);
 		/* if there is no space in the window */
 		if (remaining_window <= 0 ||
 			(remaining_window < sndvar->mss && seq - sndvar->snd_una > 0))
@@ -468,11 +469,6 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 			/* if peer window is full, send ACK and let its peer advertises new one */
 			if (sndvar->peer_wnd <= sndvar->cwnd)
 			{
-#if 0
-				TRACE_CLWND("Full peer window. "
-							"peer_wnd: %u, (snd_nxt-snd_una): %u\n",
-							sndvar->peer_wnd, seq - sndvar->snd_una);
-#endif
 				if (!wack_sent && TS_TO_MSEC(cur_ts - sndvar->ts_lastack_sent) > 500)
 					EnqueueACK(mtcp, cur_stream, cur_ts, ACK_OPT_WACK);
 				else
@@ -516,6 +512,7 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 									TCP_FLAG_ACK, data, pkt_len)) < 0)
 		{
 			/* there is no available tx buf */
+			// printf("this send packets(%d)\n", sndlen);
 			packets = -3;
 			goto out;
 		}
@@ -719,9 +716,9 @@ WriteTCPDataList(mtcp_manager_t mtcp,
 	last = TAILQ_LAST(&sender->send_list, send_head);
 	while (cur_stream)
 	{
+		// printf("enter write TCP DATA cwnd(%d)\n", cur_stream->sndvar->cwnd);
 		if (++cnt > thresh)
 			break;
-
 		TRACE_LOOP("Inside send loop. cnt: %u, stream: %d\n",
 				   cnt, cur_stream->id);
 		next = TAILQ_NEXT(cur_stream, sndvar->send_link);
@@ -760,6 +757,7 @@ WriteTCPDataList(mtcp_manager_t mtcp,
 				DumpStream(mtcp, cur_stream);
 #endif
 			}
+			// printf("enter write TCP DATA (%d)\n", ret);
 
 			if (ret < 0)
 			{
@@ -771,6 +769,7 @@ WriteTCPDataList(mtcp_manager_t mtcp,
 			{
 				cur_stream->sndvar->on_send_list = FALSE;
 				sender->send_list_cnt--;
+				// printf("WriteTCPDataList send list cnt -- cwnd(%d) \n",cur_stream->sndvar->cwnd);
 				/* the ret value is the number of packets sent. */
 				/* decrease ack_cnt for the piggybacked acks */
 #if ACK_PIGGYBACK

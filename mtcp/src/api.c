@@ -1398,7 +1398,8 @@ mtcp_recv(mctx_t mctx, int sockid, char *buf, size_t len, int flags)
 		}
 	}
 #endif
-
+	// printf("[+]7*******************mbuf(%#lx)\n", *((long *)0x11375c100));
+	// printf("buf(%p)len(%ld)flags(%d)\n", buf, len, flags);
 	switch (flags)
 	{
 	case 0:
@@ -1415,7 +1416,7 @@ mtcp_recv(mctx_t mctx, int sockid, char *buf, size_t len, int flags)
 		errno = EINVAL;
 		return ret;
 	}
-
+	// printf("[+]8*******************mbuf(%#lx)\n", *((long *)0x11375c100));
 	event_remaining = FALSE;
 	/* if there are remaining payload, generate EPOLLIN */
 	/* (may due to insufficient user buffer) */
@@ -1455,7 +1456,7 @@ mtcp_recv(mctx_t mctx, int sockid, char *buf, size_t len, int flags)
 #endif
 		}
 	}
-
+	// printf("[+]RECV cwnd(%d) snd_wnd(%d) mss(%d) addr(%p)\n", cur_stream->sndvar->cwnd, cur_stream->sndvar->snd_wnd, cur_stream->sndvar->mss, cur_stream);
 	TRACE_API("Stream %d: mtcp_recv() returning %d\n", cur_stream->id, ret);
 	return ret;
 }
@@ -1668,7 +1669,7 @@ mtcp_write(mctx_t mctx, int sockid, const char *buf, size_t len)
 	tcp_stream *cur_stream;
 	struct tcp_send_vars *sndvar;
 	int ret;
-
+	// printf("[+]5*******************mbuf(%#lx)\n", *((long *)0x11375c100));
 	mtcp = GetMTCPManager(mctx);
 	if (!mtcp)
 	{
@@ -1725,9 +1726,11 @@ mtcp_write(mctx_t mctx, int sockid, const char *buf, size_t len)
 	}
 
 	sndvar = cur_stream->sndvar;
+
 #ifndef EABLE_COROUTINE
 	SBUF_LOCK(&sndvar->write_lock);
 #endif
+
 #if BLOCKING_SUPPORT
 	if (!(socket->opts & MTCP_NONBLOCK))
 	{
@@ -1748,6 +1751,7 @@ mtcp_write(mctx_t mctx, int sockid, const char *buf, size_t len)
 #endif
 
 	ret = CopyFromUser(mtcp, cur_stream, buf, len);
+	// printf("cwnd(%d) snd_wnd(%d) mss(%d) addr(%p)\n", sndvar->cwnd, sndvar->snd_wnd, sndvar->mss, &(cur_stream->sndvar->cwnd));
 #ifndef EABLE_COROUTINE
 	SBUF_UNLOCK(&sndvar->write_lock);
 #endif
@@ -1771,8 +1775,7 @@ mtcp_write(mctx_t mctx, int sockid, const char *buf, size_t len)
 	{
 		if ((socket->epoll & MTCP_EPOLLOUT) && !(socket->epoll & MTCP_EPOLLET))
 		{
-			AddEpollEvent(mtcp->ep,
-						  USR_SHADOW_EVENT_QUEUE, socket, MTCP_EPOLLOUT);
+			AddEpollEvent(mtcp->ep, USR_SHADOW_EVENT_QUEUE, socket, MTCP_EPOLLOUT);
 #if BLOCKING_SUPPORT
 		}
 		else if (!(socket->opts & MTCP_NONBLOCK))
@@ -1787,7 +1790,7 @@ mtcp_write(mctx_t mctx, int sockid, const char *buf, size_t len)
 #endif
 		}
 	}
-
+	// printf("[+]6*******************mbuf(%#lx)\n", *((long *)0x11375c100));
 	TRACE_API("Stream %d: mtcp_write() returning %d\n", cur_stream->id, ret);
 	return ret;
 }

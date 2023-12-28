@@ -12,9 +12,6 @@
 #include "ip_in.h"
 #include "clock.h"
 
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-
 #define VERIFY_RX_CHECKSUM TRUE
 #define RECOVERY_AFTER_LOSS TRUE
 #define SELECTIVE_WRITE_EVENT_NOTIFY TRUE
@@ -386,7 +383,6 @@ ProcessACK(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_ts,
 				  sndvar->sndbuf->head_seq + sndvar->sndbuf->len);
 		return;
 	}
-
 	/* Update window */
 	if (TCP_SEQ_LT(cur_stream->rcvvar->snd_wl1, seq) ||
 		(cur_stream->rcvvar->snd_wl1 == seq &&
@@ -477,7 +473,6 @@ ProcessACK(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_ts,
 			sndvar->ssthresh = 2 * sndvar->mss;
 		}
 		sndvar->cwnd = sndvar->ssthresh + 3 * sndvar->mss;
-
 		TRACE_CONG("fast retrans: cwnd = ssthresh(%u)+3*mss = %u\n",
 				   sndvar->ssthresh / sndvar->mss,
 				   sndvar->cwnd / sndvar->mss);
@@ -505,20 +500,23 @@ ProcessACK(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_ts,
 		}
 	}
 
+// !!! MOORE: TO BE NOTICED
 #if TCP_OPT_SACK_ENABLED
 	ParseSACKOption(cur_stream, ack_seq, (uint8_t *)tcph + TCP_HEADER_LEN,
 					(tcph->doff << 2) - TCP_HEADER_LEN);
 #endif /* TCP_OPT_SACK_ENABLED */
 
 #if RECOVERY_AFTER_LOSS
+	if (TCP_SEQ_GT(ack_seq, cur_stream->snd_nxt))
 	{
 #if RTM_STAT
 		sndvar->rstat.ack_upd_cnt++;
 		sndvar->rstat.ack_upd_bytes += (ack_seq - cur_stream->snd_nxt);
 #endif
 		// fast retransmission exit: cwnd=ssthresh
+		// printf("[+]8*******************cwnd(%d)\n", *((int *)0x10b4b3b38));
 		cur_stream->sndvar->cwnd = cur_stream->sndvar->ssthresh;
-
+		// printf("[+]9*******************cwnd(%d)\n", *((int *)0x10b4b3b38));
 		TRACE_LOSS("Updating snd_nxt from %u to %u\n", cur_stream->snd_nxt, ack_seq);
 		cur_stream->snd_nxt = ack_seq;
 		TRACE_DBG("Sending again..., ack_seq=%u sndlen=%u cwnd=%u\n",
@@ -535,7 +533,7 @@ ProcessACK(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_ts,
 		}
 	}
 #endif /* RECOVERY_AFTER_LOSS */
-
+	// printf("[+]7*******************cwnd(%d)\n", *((int *)0x10b4b3b38));
 	rmlen = ack_seq - sndvar->sndbuf->head_seq;
 	uint16_t packets = rmlen / sndvar->eff_mss;
 	if (packets * sndvar->eff_mss > rmlen)
@@ -604,11 +602,11 @@ ProcessACK(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_ts,
 			assert(0);
 		}
 #endif
+
 		ret = SBRemove(mtcp->rbm_snd, sndvar->sndbuf, rmlen);
 		sndvar->snd_una = ack_seq;
 		snd_wnd_prev = sndvar->snd_wnd;
 		sndvar->snd_wnd = sndvar->sndbuf->size - sndvar->sndbuf->len;
-
 		/* If there was no available sending window */
 		/* notify the newly available window to application */
 #if SELECTIVE_WRITE_EVENT_NOTIFY
@@ -692,7 +690,7 @@ ProcessTCPPayload(mtcp_manager_t mtcp, tcp_stream *cur_stream,
 	}
 	cur_stream->rcv_nxt = rcvvar->rcvbuf->head_seq + rcvvar->rcvbuf->merged_len;
 	rcvvar->rcv_wnd = rcvvar->rcvbuf->size - rcvvar->rcvbuf->merged_len;
-	
+
 #ifndef EABLE_COROUTINE
 	SBUF_UNLOCK(&rcvvar->read_lock);
 #endif
@@ -936,7 +934,7 @@ Handle_TCP_ST_SYN_RCVD(mtcp_manager_t mtcp, uint32_t cur_ts,
 		prior_cwnd = sndvar->cwnd;
 		sndvar->cwnd = ((prior_cwnd == 1) ? (sndvar->mss * TCP_INIT_CWND) : sndvar->mss);
 		TRACE_DBG("sync_recvd: updating cwnd from %u to %u\n", prior_cwnd, sndvar->cwnd);
-
+		// printf("sync_recvd: updating cwnd from %u to %u\n", prior_cwnd, sndvar->cwnd);
 		// UpdateRetransmissionTimer(mtcp, cur_stream, cur_ts);
 		sndvar->nrtx = 0;
 		cur_stream->rcv_nxt = cur_stream->rcvvar->irs + 1;
@@ -1463,8 +1461,11 @@ int ProcessTCPPacket(mtcp_manager_t mtcp,
 		break;
 
 	case TCP_ST_ESTABLISHED:
+
+		// printf("[+]5*******************cwnd(%d)\n", *((int *)0x10b4b3b38));
 		Handle_TCP_ST_ESTABLISHED(mtcp, cur_ts, cur_stream, tcph,
 								  seq, ack_seq, payload, payloadlen, window);
+		// printf("[+]6*******************cwnd(%d)\n", *((int *)0x10b4b3b38));
 		break;
 
 	case TCP_ST_CLOSE_WAIT:

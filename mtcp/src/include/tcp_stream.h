@@ -6,9 +6,6 @@
 #include <sys/queue.h>
 
 #include "mtcp.h"
-#if RATE_LIMIT_ENABLED || PACING_ENABLED
-#include "pacing.h"
-#endif
 
 struct rtm_stat
 {

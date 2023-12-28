@@ -187,27 +187,27 @@ void _lthread_init(struct lthread *lt,
  */
 void _lthread_set_stack(struct lthread *lt, void *stack, size_t stack_size)
 {
-#ifdef __x86_64__
-	char *stack_top = (char *)stack + stack_size;
-	void **s = (void **)stack_top;
+// #ifdef __x86_64__
+// 	char *stack_top = (char *)stack + stack_size;
+// 	void **s = (void **)stack_top;
 
-	/* set stack */
-	lt->stack = stack;
-	lt->stack_size = stack_size;
+// 	/* set stack */
+// 	lt->stack = stack;
+// 	lt->stack_size = stack_size;
 
-	/* set initial context */
-	s[-3] = NULL;
-	s[-2] = (void *)lt;
-	lt->ctx.rsp = (void *)(stack_top - (4 * sizeof(void *)));
-	lt->ctx.rbp = (void *)(stack_top - (3 * sizeof(void *)));
-	lt->ctx.rip = (void *)_lthread_exec;
-#else
-	char *stack_top = (void*)((char *)stack + stack_size);
+// 	/* set initial context */
+// 	s[-3] = NULL;
+// 	s[-2] = (void *)lt;
+// 	lt->ctx.rsp = (void *)(stack_top - (4 * sizeof(void *)));
+// 	lt->ctx.rbp = (void *)(stack_top - (3 * sizeof(void *)));
+// 	lt->ctx.rip = (void *)_lthread_exec;
+// #else
+	void**stack_top = (void*)((unsigned long)stack + stack_size);
 	/*
 	 * Align stack_top to 16 bytes. Arm64 has the constraint that the
 	 * stack pointer must always be quad-word aligned.
 	 */
-	stack_top = (char*)((void **)(((unsigned long)(stack_top)) & ~0xfUL));
+	stack_top = ((void **)(((unsigned long)(stack_top)) & ~0xfUL));
 
 	/* set stack */
 	lt->stack = stack;
@@ -216,8 +216,8 @@ void _lthread_set_stack(struct lthread *lt, void *stack, size_t stack_size)
 	/*
 	 * First Stack Frame
 	 */
-	((void**)stack_top)[0] = NULL;
-	((void**)stack_top)[-1] = NULL;
+	stack_top[0] = NULL;
+	stack_top[-1] = NULL;
 
 	/*
 	 * Initialize the context
@@ -234,7 +234,7 @@ void _lthread_set_stack(struct lthread *lt, void *stack, size_t stack_size)
 	 * register x0 will always contain the required value.
 	 */
 	lt->ctx.lr = (void *)_lthread_exec;
-#endif
+// #endif
 }
 /*
  * Create an lthread on the current scheduler

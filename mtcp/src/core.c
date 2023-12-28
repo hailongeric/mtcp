@@ -31,6 +31,7 @@
 
 #ifdef EABLE_COROUTINE
 #include "lthread_api.h"
+#include "schedule.h"
 #endif
 
 /* for launching rte thread */
@@ -59,7 +60,9 @@
 /*----------------------------------------------------------------------------*/
 /* handlers for threads */
 struct mtcp_thread_context *g_pctx[MAX_CPUS] = {0};
+#ifdef ENABLE_LOGGER
 struct log_thread_context *g_logctx[MAX_CPUS] = {0};
+#endif
 /*----------------------------------------------------------------------------*/
 #ifdef EABLE_COROUTINE
 static lthread_t g_thread[MAX_CPUS] = {0};
@@ -565,7 +568,11 @@ HandleApplicationCalls(mtcp_manager_t mtcp, uint32_t cur_ts)
 	while ((stream = StreamDequeue(mtcp->sendq)))
 	{
 		stream->sndvar->on_sendq = FALSE;
+		// printf("[+] S: S_BUF(%s) cwd(%p)\n", stream->sndvar->sndbuf->data, &(stream->sndvar->cwnd));
+		// printf("[+]4*******************mbuf(%#lx)\n", *((long *)0x11375c100));
 		AddtoSendList(mtcp, stream);
+		// printf("[+] E: S_BUF(%s) cwd(%d)\n", stream->sndvar->sndbuf->data, stream->sndvar->cwnd);
+		// printf("[+]2*******************mbuf(%#lx)\n", *((long *)0x11375c100));
 	}
 
 	/* ack queue handling */
@@ -907,12 +914,14 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 	int rx_inf, tx_inf;
 	struct timeval cur_ts = {0};
 	uint32_t ts, ts_prev;
-	int thresh;
+	int thresh = CONFIG.max_concurrency;
+	static uint16_t len;
+	static uint8_t *pktbuf;
 
 	gettimeofday(&cur_ts, NULL);
 	TRACE_DBG("CPU %d: mtcp thread running.\n", ctx->cpu);
-
 	ts = ts_prev = 0;
+
 	while ((!ctx->done || mtcp->flow_cnt) && !ctx->exit)
 	{
 
@@ -921,6 +930,8 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 		// dpdk_run_look_counts++;
 
 		gettimeofday(&cur_ts, NULL);
+		ts = TIMEVAL_TO_TS(&cur_ts);
+		mtcp->cur_ts = ts;
 		// unsigned long time2 = 0;
 		// asm volatile("MRS %0, PMCCNTR_EL0" : "=r"(time2));
 		// printf("dpdk loop (%ld)\n", time2);
@@ -931,14 +942,10 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 		// 	dpdk_run_look_counts = 0;
 		// 	hl_time = cur_ts;
 		// }
-		ts = TIMEVAL_TO_TS(&cur_ts);
-		mtcp->cur_ts = ts;
 
 		for (rx_inf = 0; rx_inf < CONFIG.eths_num; rx_inf++)
 		{
 
-			static uint16_t len;
-			static uint8_t *pktbuf;
 			recv_cnt = mtcp->iom->recv_pkts(ctx, rx_inf);
 			STAT_COUNT(mtcp->runstat.rounds_rx_try);
 
@@ -947,8 +954,11 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 				pktbuf = mtcp->iom->get_rptr(mtcp->ctx, rx_inf, i, &len);
 				if (pktbuf != NULL)
 				{
-					HL_PRINT("[+] MTCP Recv Packet with length %u, process on core %d\n", len, ctx->cpu);
+					// printf("[+] MTCP Recv Packet with length %u, process on core %d\n", len, ctx->cpu);
+					// ! in accelTCP why use mm_prefetch to fetch pktbuf
+					// printf("[+]1*******************mbuf(%#lx)\n", *((long *)0x11375c100));
 					ProcessPacket(mtcp, rx_inf, ts, pktbuf, len);
+					// printf("[+]3*******************mbuf(%#lx)\n", *((long *)0x11375c100));
 				}
 #ifdef NETSTAT
 				else
@@ -963,25 +973,13 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 		{
 
 			/* check retransmission timeout and timewait expire */
-#if 0
-			thresh = (int)mtcp->flow_cnt / (TS_TO_USEC(PER_STREAM_TCHECK));
-			assert(thresh >= 0);
-			if (thresh == 0)
-				thresh = 1;
-			if (recv_cnt > 0 && thresh > recv_cnt)
-				thresh = recv_cnt;
-#endif
-			thresh = CONFIG.max_concurrency;
 
 			/* Eunyoung, you may fix this later
 			 * if there is no rcv packet, we will send as much as possible
 			 */
-			if (thresh == -1)
-				thresh = CONFIG.max_concurrency;
 
 			CheckRtmTimeout(mtcp, ts, thresh);
-			CheckTimewaitExpire(mtcp, ts, CONFIG.max_concurrency);
-
+			CheckTimewaitExpire(mtcp, ts, thresh);
 			if (CONFIG.tcp_timeout > 0 && ts != ts_prev)
 			{
 				CheckConnectionTimeout(mtcp, ts, thresh);
@@ -991,7 +989,6 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 		/* if epoll is in use, flush all the queued events */
 		if (mtcp->ep)
 		{
-			// printf("flush epoll\n");
 			FlushEpollEvents(mtcp, ts);
 		}
 
@@ -1043,9 +1040,11 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 #endif
 	HL_PRINT("MTCP thread %d out of main loop.\n", ctx->cpu);
 	TRACE_DBG("MTCP thread %d out of main loop.\n", ctx->cpu);
+#ifdef ENABLE_LOGGER
 	/* flush logs */
 	flush_log_data(mtcp);
 	TRACE_DBG("MTCP thread %d flushed logs.\n", ctx->cpu);
+#endif
 	InterruptApplication(mtcp);
 	TRACE_INFO("MTCP thread %d finished.\n", ctx->cpu);
 }
@@ -1110,7 +1109,6 @@ InitializeMTCPManager(struct mtcp_thread_context *ctx)
 	}
 
 	mtcp->ctx = ctx;
-#if !defined(DISABLE_DPDK)
 	char pool_name[RTE_MEMPOOL_NAMESIZE];
 	sprintf(pool_name, "flow_pool_%d", ctx->cpu);
 	mtcp->flow_pool = MPCreate(pool_name, sizeof(tcp_stream),
@@ -1136,29 +1134,7 @@ InitializeMTCPManager(struct mtcp_thread_context *ctx)
 		CTRACE_ERROR("Failed to allocate tcp send variable pool.\n");
 		return NULL;
 	}
-#else
-	mtcp->flow_pool = MPCreate(sizeof(tcp_stream),
-							   sizeof(tcp_stream) * CONFIG.max_concurrency);
-	if (!mtcp->flow_pool)
-	{
-		CTRACE_ERROR("Failed to allocate tcp flow pool.\n");
-		return NULL;
-	}
-	mtcp->rv_pool = MPCreate(sizeof(struct tcp_recv_vars),
-							 sizeof(struct tcp_recv_vars) * CONFIG.max_concurrency);
-	if (!mtcp->rv_pool)
-	{
-		CTRACE_ERROR("Failed to allocate tcp recv variable pool.\n");
-		return NULL;
-	}
-	mtcp->sv_pool = MPCreate(sizeof(struct tcp_send_vars),
-							 sizeof(struct tcp_send_vars) * CONFIG.max_concurrency);
-	if (!mtcp->sv_pool)
-	{
-		CTRACE_ERROR("Failed to allocate tcp send variable pool.\n");
-		return NULL;
-	}
-#endif
+
 	mtcp->rbm_snd = SBManagerCreate(mtcp, CONFIG.sndbuf_size, CONFIG.max_num_buffers);
 	if (!mtcp->rbm_snd)
 	{
@@ -1194,6 +1170,7 @@ InitializeMTCPManager(struct mtcp_thread_context *ctx)
 
 	mtcp->ep = NULL;
 
+#ifdef ENABLE_LOGGER
 	snprintf(log_name, MAX_FILE_NAME, LOG_FILE_NAME "_%d", ctx->cpu);
 	mtcp->log_fp = fopen(log_name, "w");
 	if (!mtcp->log_fp)
@@ -1204,6 +1181,7 @@ InitializeMTCPManager(struct mtcp_thread_context *ctx)
 	}
 	mtcp->sp_fd = g_logctx[ctx->cpu]->pair_sp_fd;
 	mtcp->logger = g_logctx[ctx->cpu];
+#endif
 
 	mtcp->connectq = CreateStreamQueue(BACKLOG_SIZE);
 	if (!mtcp->connectq)
@@ -1446,7 +1424,6 @@ mctx_t
 mtcp_create_context(int cpu)
 {
 	mctx_t mctx;
-	int ret;
 
 	if (cpu >= CONFIG.num_cores)
 	{
@@ -1455,7 +1432,7 @@ mtcp_create_context(int cpu)
 					cpu, CONFIG.num_cores);
 		return NULL;
 	}
-
+#ifdef ENABLE_LOGGER
 	/* check if mtcp_create_context() was already initialized */
 	if (g_logctx[cpu] != NULL)
 	{
@@ -1463,8 +1440,11 @@ mtcp_create_context(int cpu)
 					__FUNCTION__);
 		return NULL;
 	}
+#endif
+
 #ifdef EABLE_COROUTINE
 #else
+	int ret;
 	ret = sem_init(&g_init_sem[cpu], 0, 0);
 	if (ret)
 	{
@@ -1480,31 +1460,6 @@ mtcp_create_context(int cpu)
 		return NULL;
 	}
 	mctx->cpu = cpu;
-
-	// 	/* initialize logger */
-	// 	g_logctx[cpu] = (struct log_thread_context *)
-	// 		calloc(1, sizeof(struct log_thread_context));
-	// 	if (!g_logctx[cpu])
-	// 	{
-	// 		perror("calloc");
-	// 		TRACE_ERROR("Failed to allocate memory for log thread context.\n");
-	// 		free(mctx);
-	// 		return NULL;
-	// 	}
-	// 	InitLogThreadContext(g_logctx[cpu], cpu);
-	// #if defined(PKTDUMP) || (DBGMSG) || (DBGFUNC) ||
-	// 	(STREAM) || (STATE) || (STAT) || (APP) ||
-	// 	(EPOLL) || (DUMP_STREAM)
-	// 	if (pthread_create(&log_thread[cpu],
-	// 					   NULL, ThreadLogMain, (void *)g_logctx[cpu]))
-	// 	{
-	// 		perror("pthread_create");
-	// 		TRACE_ERROR("Failed to create log thread\n");
-	// 		free(g_logctx[cpu]);
-	// 		free(mctx);
-	// 		return NULL;
-	// 	}
-	// #endif
 
 #ifdef ENABLE_LOGGER
 	/* initialize logger */
@@ -1674,8 +1629,7 @@ void mtcp_free_context(mctx_t mctx)
 {
 	struct mtcp_thread_context *ctx = g_pctx[mctx->cpu];
 	struct mtcp_manager *mtcp = ctx->mtcp_manager;
-	struct log_thread_context *log_ctx = mtcp->logger;
-	int ret, i;
+	int i;
 
 	if (g_pctx[mctx->cpu] == NULL)
 		return;
@@ -1725,6 +1679,9 @@ void mtcp_free_context(mctx_t mctx)
 			}
 		}
 	}
+#ifdef ENABLE_LOGGER
+	int ret;
+	struct log_thread_context *log_ctx = mtcp->logger;
 
 	log_ctx->done = 1;
 	ret = write(log_ctx->pair_sp_fd, "F", 1);
@@ -1735,7 +1692,7 @@ void mtcp_free_context(mctx_t mctx)
 #endif
 	fclose(mtcp->log_fp);
 	TRACE_LOG("Log thread %d joined.\n", mctx->cpu);
-
+#endif
 	if (mtcp->connectq)
 	{
 		DestroyStreamQueue(mtcp->connectq);
@@ -1803,12 +1760,15 @@ void mtcp_free_context(mctx_t mctx)
 	// TRACE_INFO("MTCP thread %d destroyed.\n", mctx->cpu);
 	mtcp->iom->destroy_handle(ctx);
 	free(ctx);
+
+#ifdef ENABLE_LOGGER
 	if (g_logctx[mctx->cpu])
 	{
 		free(g_logctx[mctx->cpu]);
 		g_logctx[mctx->cpu] = NULL;
 	}
 	g_pctx[mctx->cpu] = NULL;
+#endif
 }
 /*----------------------------------------------------------------------------*/
 mtcp_sighandler_t
