@@ -267,10 +267,6 @@ int SendTCPPacket(struct mtcp_manager *mtcp, tcp_stream *cur_stream,
 					  cur_stream->id,
 					  cur_stream->snd_nxt, cur_stream->sndvar->iss);
 		}
-#if 0
-		TRACE_FIN("Stream %d: Sending SYN. seq: %u, ack_seq: %u\n", 
-				cur_stream->id, cur_stream->snd_nxt, cur_stream->rcv_nxt);
-#endif
 	}
 	if (flags & TCP_FLAG_RST)
 	{

@@ -12,6 +12,7 @@
 #include "debug.h"
 #include "logger.h"
 
+#ifdef ENABLE_LOGGER
 /*----------------------------------------------------------------------------*/
 static void
 EnqueueFreeBuffer(log_thread_context *ctx, log_buff *free_bp) 
@@ -168,3 +169,32 @@ ThreadLogMain(void* arg)
 	return NULL;
 }
 /*----------------------------------------------------------------------------*/
+
+/*----------------------------------------------------------------------------*/
+#else
+/*----------------------------------------------------------------------------*/
+log_buff*
+DequeueFreeBuffer (log_thread_context *ctx)
+{
+	return (log_buff *) NULL;
+}
+/*----------------------------------------------------------------------------*/
+void
+EnqueueJobBuffer(log_thread_context *ctx, log_buff* working_bp)
+{
+	return;
+}
+/*----------------------------------------------------------------------------*/
+void
+InitLogThreadContext (log_thread_context *ctx, int cpu)
+{
+	return;
+}
+/*----------------------------------------------------------------------------*/
+void *
+ThreadLogMain(void* arg)
+{
+	return NULL;
+}
+/*----------------------------------------------------------------------------*/
+#endif

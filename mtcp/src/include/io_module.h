@@ -103,9 +103,6 @@ extern io_module_func dpdk_module_func;
 /* registered netmap context */
 extern io_module_func netmap_module_func;
 
-/* registered onvm context */
-extern io_module_func onvm_module_func;
-
 /* check I/O module access permissions */
 int
 CheckIOModuleAccessPermissions();

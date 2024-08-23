@@ -139,16 +139,13 @@ EnrollRouteTableEntry(char *optstr)
 			exit(4);
 		}
 #endif
-	} else if (current_iomodule_func == &dpdk_module_func ||
-		   current_iomodule_func == &onvm_module_func) {
-#ifndef DISABLE_DPDK
+	} else if (current_iomodule_func == &dpdk_module_func) {
 		for (i = 0; i < num_devices; i++) {
 			if (strcmp(CONFIG.eths[i].dev_name, dev))
 				continue;
 			ifidx = CONFIG.eths[i].ifindex;
 			break;
 		}
-#endif
 	}
 
 	ridx = CONFIG.routes++;

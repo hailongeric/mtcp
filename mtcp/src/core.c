@@ -956,9 +956,7 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 				{
 					// printf("[+] MTCP Recv Packet with length %u, process on core %d\n", len, ctx->cpu);
 					// ! in accelTCP why use mm_prefetch to fetch pktbuf
-					// printf("[+]1*******************mbuf(%#lx)\n", *((long *)0x11375c100));
 					ProcessPacket(mtcp, rx_inf, ts, pktbuf, len);
-					// printf("[+]3*******************mbuf(%#lx)\n", *((long *)0x11375c100));
 				}
 #ifdef NETSTAT
 				else
@@ -1484,39 +1482,6 @@ mtcp_create_context(int cpu)
 		return NULL;
 	}
 #endif
-
-	// #ifndef DISABLE_DPDK
-	// 	/* Wake up mTCP threads (wake up I/O threads) */
-
-	// 		int master;
-	// 		master = rte_get_main_lcore();
-
-	// 		if (master == whichCoreID(cpu))
-	// 		{
-	// 			// lcore_config[master].ret = 0;
-	// 			// lcore_config[master].state = FINISHED;
-
-	// 			if (pthread_create(&g_thread[cpu],
-	// 							   NULL, MTCPRunThread, (void *)mctx) != 0)
-	// 			{
-	// 				TRACE_ERROR("pthread_create of mtcp thread failed!\n");
-	// 				return NULL;
-	// 			}
-	// 		}
-	// 		else
-	// 			rte_eal_remote_launch(MTCPDPDKRunThread, mctx, whichCoreID(cpu));
-
-	// #endif
-
-	// 		if (pthread_create(&g_thread[cpu],
-	// 						   NULL, MTCPRunThread, (void *)mctx) != 0)
-	// 		{
-	// 			TRACE_ERROR("pthread_create of mtcp thread failed!\n");
-	// 			return NULL;
-	// 		}
-
-	// 	sem_wait(&g_init_sem[cpu]);
-	// 	sem_destroy(&g_init_sem[cpu]);
 
 #ifdef EABLE_COROUTINE
 	int working;

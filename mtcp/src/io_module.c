@@ -537,7 +537,6 @@ SetNetEnv(char *dev_name_list, char *port_stat_list)
 
 		freeifaddrs(ifap);
 #endif /* !DISABLE_NETMAP */
-	} else if (current_iomodule_func == &onvm_module_func) {
 	}
 
 	CONFIG.nif_to_eidx = (int*)calloc(MAX_DEVICES, sizeof(int));
