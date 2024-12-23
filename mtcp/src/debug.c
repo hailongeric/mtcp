@@ -6,6 +6,7 @@
 #include "debug.h"
 #include "tcp_in.h"
 #include "logger.h"
+#include "ip_in.h"  // for ip_fast_csum
 
 /*----------------------------------------------------------------------------*/
 void flush_log_data(mtcp_manager_t mtcp)

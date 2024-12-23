@@ -1,7 +1,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include "ps.h"
+#define ETH_ALEN 6
+#define MAX_DEVICES 6
 
 extern int num_cpus;
 extern int num_queues;

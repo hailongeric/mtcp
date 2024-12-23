@@ -43,12 +43,14 @@
 #ifdef ENABLELRO
 #define BUF_SIZE 16384
 #else
-// #define BUF_SIZE 2048
-#define BUF_SIZE 16384
+#define BUF_SIZE 1900
+// sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM == 128
+// #define BUF_SIZE 16384
 #endif /* !ENABLELRO */
 #define MBUF_SIZE (BUF_SIZE + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
-#define NB_MBUF 8192
-#define MEMPOOL_CACHE_SIZE 256
+
+#define NB_MBUF 4096
+#define MEMPOOL_CACHE_SIZE 64
 #ifdef ENFORCE_RX_IDLE
 #define RX_IDLE_ENABLE 1
 #define RX_IDLE_TIMEOUT 1 /* in micro-seconds */
@@ -56,7 +58,7 @@
 
 /*
  * RX and TX Prefetch, Host, and Write-back threshold values should be
- * carefully set for optimal performance. Consult the network
+ * carefully set for optimal performance. Consult the nedptwork
  * controller's datasheet and supporting DPDK documentation for guidance
  * on how these parameters should be set.
  */
@@ -73,13 +75,13 @@
 #define TX_HTHRESH 0  /**< Default values of TX host threshold reg. */
 #define TX_WTHRESH 0  /**< Default values of TX write-back threshold reg. */
 
-#define MAX_PKT_BURST 256 // 64 /*128*/
+#define MAX_PKT_BURST 128 // 64 /*128*/
 
 /*
  * Configurable number of RX/TX ring descriptors
  */
-#define RTE_TEST_RX_DESC_DEFAULT 256
-#define RTE_TEST_TX_DESC_DEFAULT 256
+#define RTE_TEST_RX_DESC_DEFAULT 1024
+#define RTE_TEST_TX_DESC_DEFAULT 1024
 
 /*
  * Ethernet frame overhead
@@ -98,10 +100,10 @@ static struct rte_mempool *pktmbuf_pool[MAX_CPUS] = {NULL};
 // #define DEBUG				1
 #ifdef DEBUG
 /* ethernet addresses of ports */
-static struct rte_ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
+static struct rte_ether_addr ports_eth_addr[HL_MAX_ETHPORTS];
 #endif
 
-static struct rte_eth_dev_info dev_info[RTE_MAX_ETHPORTS];
+static struct rte_eth_dev_info dev_info[HL_MAX_ETHPORTS];
 
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
@@ -123,7 +125,7 @@ static struct rte_eth_conf port_conf = {
 		// #endif
 		// 					 ),
 		// #endif /* !17.08 */
-		.mtu = 9000,
+		.mtu = 1500,
 
 		.split_hdr_size = 0,
 		// #if RTE_VERSION < RTE_VERSION_NUM(18, 5, 0, 0)
@@ -140,6 +142,7 @@ static struct rte_eth_conf port_conf = {
 	},
 	.rx_adv_conf = {
 		.rss_conf = {.rss_key = NULL, .rss_hf = ETH_RSS_TCP | ETH_RSS_UDP | ETH_RSS_IP | ETH_RSS_L2_PAYLOAD},
+		// .rss_conf = { .rss_hf = ETH_RSS_TCP | ETH_RSS_UDP | ETH_RSS_IP | ETH_RSS_L2_PAYLOAD},
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -174,8 +177,8 @@ struct mbuf_table
 
 struct dpdk_private_context
 {
-	struct mbuf_table rmbufs[RTE_MAX_ETHPORTS];
-	struct mbuf_table wmbufs[RTE_MAX_ETHPORTS];
+	struct mbuf_table rmbufs[HL_MAX_ETHPORTS];
+	struct mbuf_table wmbufs[HL_MAX_ETHPORTS];
 	struct rte_mempool *pktmbuf_pool;
 	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
 #ifdef RX_IDLE_ENABLE
@@ -414,7 +417,7 @@ dpdk_get_wptr(struct mtcp_thread_context *ctxt, int ifidx, uint16_t pktsize)
 	/* sanity check */
 	if (unlikely(dpc->wmbufs[ifidx].len == MAX_PKT_BURST))
 	{
-		printf("unlikely(dpc->wmbufs[ifidx].len == MAX_PKT_BURST RTE_MAX_ETHPORTS(%d) num_devices_attached(%d) sanity check failed\n", RTE_MAX_ETHPORTS, num_devices_attached);
+		printf("unlikely(dpc->wmbufs[ifidx].len == MAX_PKT_BURST HL_MAX_ETHPORTS(%d) num_devices_attached(%d) sanity check failed\n", HL_MAX_ETHPORTS, num_devices_attached);
 		return NULL;
 	}
 
@@ -698,11 +701,11 @@ void dpdk_load_module(void)
 			/* create the mbuf pools */
 			pktmbuf_pool[rxlcore_id] =
 				rte_mempool_create(name, nb_mbuf,
-								   MBUF_SIZE, MEMPOOL_CACHE_SIZE,
+								   MBUF_SIZE, 32,
 								   sizeof(struct rte_pktmbuf_pool_private),
 								   rte_pktmbuf_pool_init, NULL,
 								   rte_pktmbuf_init, NULL,
-								   rte_socket_id(), MEMPOOL_F_SP_PUT | MEMPOOL_F_SC_GET);
+								   SOCKET_ID_ANY, MEMPOOL_F_SP_PUT | MEMPOOL_F_SC_GET);
 
 			if (pktmbuf_pool[rxlcore_id] == NULL)
 				rte_exit(EXIT_FAILURE, "Cannot init mbuf pool, errno: %d\n",
@@ -718,13 +721,12 @@ void dpdk_load_module(void)
 
 			/* check port capabilities */
 			rte_eth_dev_info_get(portid, &dev_info[portid]);
-#if RTE_VERSION >= RTE_VERSION_NUM(18, 5, 0, 0)
 			/* re-adjust rss_hf */
 			port_conf.rx_adv_conf.rss_conf.rss_hf &= dev_info[portid].flow_type_rss_offloads;
-#endif
+
 			/* init port */
-			printf("Initializing port %u... ", (unsigned)portid);
-			printf("Device name: %s", dev_info[portid].device->name);
+			printf("Initializing port %u... \n", (unsigned)portid);
+			printf("Device name: %s\n", dev_info[portid].device->name);
 			fflush(stdout);
 			// if (!strncmp(dev_info[portid].driver_name, "net_mlx", 7))
 			// 	port_conf.rx_adv_conf.rss_conf.rss_key_len = 40;
@@ -735,6 +737,8 @@ void dpdk_load_module(void)
 			{
 				port_conf.rx_adv_conf.rss_conf.rss_key_len = 40;
 			}
+			// !!! patch for enp3s0f0s0
+			port_conf.rx_adv_conf.rss_conf.rss_key_len = 40;
 
 			printf("try rte_eth_dev_configure\n");
 			fflush(stdout);
@@ -749,7 +753,7 @@ void dpdk_load_module(void)
 #ifdef DEBUG
 			rte_eth_macaddr_get(portid, &ports_eth_addr[portid]);
 #endif
-			printf("try rte_eth_rx_queue_setup\n");
+			printf("try rte_eth_rx_queue_setup q_num %d\n",CONFIG.num_cores);
 			fflush(stdout);
 			for (rxlcore_id = 0; rxlcore_id < CONFIG.num_cores; rxlcore_id++)
 			{
@@ -763,7 +767,7 @@ void dpdk_load_module(void)
 			}
 
 			/* init one TX queue on each port per CPU (this is redundant for this app) */
-			printf("try rte_eth_tx_queue_setup\n");
+			printf("try rte_eth_tx_queue_setup q_num %d\n",CONFIG.num_cores);
 			fflush(stdout);
 			for (rxlcore_id = 0; rxlcore_id < CONFIG.num_cores; rxlcore_id++)
 			{

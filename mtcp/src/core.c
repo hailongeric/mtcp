@@ -11,7 +11,6 @@
 #include <sched.h>
 
 #include "cpu.h"
-#include "ps.h"
 #include "eth_in.h"
 #include "fhash.h"
 #include "tcp_send_buffer.h"
@@ -957,12 +956,17 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 					// printf("[+] MTCP Recv Packet with length %u, process on core %d\n", len, ctx->cpu);
 					// ! in accelTCP why use mm_prefetch to fetch pktbuf
 					ProcessPacket(mtcp, rx_inf, ts, pktbuf, len);
+
+					/* send packets from write buffer */
+					/* send until tx is available */
 				}
 #ifdef NETSTAT
 				else
 					mtcp->nstat.rx_errors[rx_inf]++;
 #endif
 			}
+
+			mtcp->iom->send_pkts(ctx, 0);
 		}
 		STAT_COUNT(mtcp->runstat.rounds_rx);
 
@@ -1002,6 +1006,8 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 			YieldToApp(ctx, TRUE);
 #endif
 		}
+
+		mtcp->iom->send_pkts(ctx, 0);
 
 		WritePacketsToChunks(mtcp, ts);
 
@@ -1080,7 +1086,6 @@ static mtcp_manager_t
 InitializeMTCPManager(struct mtcp_thread_context *ctx)
 {
 	mtcp_manager_t mtcp;
-	char log_name[MAX_FILE_NAME];
 	int i;
 
 	mtcp = (mtcp_manager_t)calloc(1, sizeof(struct mtcp_manager));
@@ -1167,19 +1172,6 @@ InitializeMTCPManager(struct mtcp_thread_context *ctx)
 	}
 
 	mtcp->ep = NULL;
-
-#ifdef ENABLE_LOGGER
-	snprintf(log_name, MAX_FILE_NAME, LOG_FILE_NAME "_%d", ctx->cpu);
-	mtcp->log_fp = fopen(log_name, "w");
-	if (!mtcp->log_fp)
-	{
-		perror("fopen");
-		CTRACE_ERROR("Failed to create file for logging.\n");
-		return NULL;
-	}
-	mtcp->sp_fd = g_logctx[ctx->cpu]->pair_sp_fd;
-	mtcp->logger = g_logctx[ctx->cpu];
-#endif
 
 	mtcp->connectq = CreateStreamQueue(BACKLOG_SIZE);
 	if (!mtcp->connectq)

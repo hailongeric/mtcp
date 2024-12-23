@@ -18,7 +18,6 @@
 #include "mtcp_api.h"
 #include "eventpoll.h"
 #include "addr_pool.h"
-#include "ps.h"
 #include "logger.h"
 #include "stat.h"
 #include "io_module.h"

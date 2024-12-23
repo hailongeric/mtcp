@@ -2,6 +2,7 @@
 #include "tcp_in.h"
 #include "tcp_out.h"
 #include "stat.h"
+#include "config.h"
 #include "debug.h"
 
 #ifndef MAX
