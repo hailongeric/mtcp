@@ -966,7 +966,7 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 #endif
 			}
 
-			mtcp->iom->send_pkts(ctx, 0);
+			mtcp->iom->send_pkts(ctx, 0,0);
 		}
 		STAT_COUNT(mtcp->runstat.rounds_rx);
 
@@ -1007,7 +1007,7 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 #endif
 		}
 
-		mtcp->iom->send_pkts(ctx, 0);
+		mtcp->iom->send_pkts(ctx, 0,0);
 
 		WritePacketsToChunks(mtcp, ts);
 
@@ -1016,7 +1016,7 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 		// for (tx_inf = 0; tx_inf < CONFIG.eths_num; tx_inf++)
 		// {
 			// printf("send pkt\n");
-			mtcp->iom->send_pkts(ctx, 0);
+			mtcp->iom->send_pkts(ctx, 0,0);
 		// }
 
 		if (ts != ts_prev)

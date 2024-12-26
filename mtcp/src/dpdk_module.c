@@ -313,7 +313,7 @@ void dpdk_release_pkt(struct mtcp_thread_context *ctxt, int ifidx, unsigned char
 	 */
 }
 /*----------------------------------------------------------------------------*/
-int dpdk_send_pkts(struct mtcp_thread_context *ctxt, int ifidx)
+int dpdk_send_pkts(struct mtcp_thread_context *ctxt, int ifidx, int flag)
 {
 	struct dpdk_private_context *dpc;
 	int ret, i, portid = CONFIG.eths[ifidx].ifindex;
