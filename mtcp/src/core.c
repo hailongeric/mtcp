@@ -1013,11 +1013,11 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 
 		/* send packets from write buffer */
 		/* send until tx is available */
-		for (tx_inf = 0; tx_inf < CONFIG.eths_num; tx_inf++)
-		{
+		// for (tx_inf = 0; tx_inf < CONFIG.eths_num; tx_inf++)
+		// {
 			// printf("send pkt\n");
-			mtcp->iom->send_pkts(ctx, tx_inf);
-		}
+			mtcp->iom->send_pkts(ctx, 0);
+		// }
 
 		if (ts != ts_prev)
 		{

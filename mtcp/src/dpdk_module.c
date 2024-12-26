@@ -43,7 +43,7 @@
 #ifdef ENABLELRO
 #define BUF_SIZE 16384
 #else
-#define BUF_SIZE 1900
+#define BUF_SIZE 1644
 // sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM == 128
 // #define BUF_SIZE 16384
 #endif /* !ENABLELRO */
@@ -75,7 +75,7 @@
 #define TX_HTHRESH 0  /**< Default values of TX host threshold reg. */
 #define TX_WTHRESH 0  /**< Default values of TX write-back threshold reg. */
 
-#define MAX_PKT_BURST 128 // 64 /*128*/
+#define MAX_PKT_BURST 256 // 64 /*128*/
 
 /*
  * Configurable number of RX/TX ring descriptors
@@ -172,6 +172,9 @@ static const struct rte_eth_txconf tx_conf = {
 struct mbuf_table
 {
 	uint16_t len; /* length of queued packets */
+	uint16_t head;
+	uint16_t tail; 
+	uint16_t unused;
 	struct rte_mbuf *m_table[MAX_PKT_BURST];
 };
 
@@ -257,6 +260,9 @@ void dpdk_init_handle(struct mtcp_thread_context *ctxt)
 		}
 		/* set mbufs queue length to 0 to begin with */
 		dpc->wmbufs[j].len = 0;
+		dpc->wmbufs[j].head = 0;
+		dpc->wmbufs[j].tail = 0;
+		dpc->wmbufs[j].unused = 0;
 	}
 
 #ifdef IP_DEFRAG
@@ -310,15 +316,8 @@ void dpdk_release_pkt(struct mtcp_thread_context *ctxt, int ifidx, unsigned char
 int dpdk_send_pkts(struct mtcp_thread_context *ctxt, int ifidx)
 {
 	struct dpdk_private_context *dpc;
-#ifdef NETSTAT
-	mtcp_manager_t mtcp;
-#endif
 	int ret, i, portid = CONFIG.eths[ifidx].ifindex;
-
 	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
-#ifdef NETSTAT
-	mtcp = ctxt->mtcp_manager;
-#endif
 	ret = 0;
 
 	/* if there are packets in the queue... flush them out to the wire */
@@ -328,47 +327,9 @@ int dpdk_send_pkts(struct mtcp_thread_context *ctxt, int ifidx)
 		// asm volatile("MRS %0, PMCCNTR_EL0" : "=r"(time));
 		// printf("dpdk wirte (%ld)\n", time);
 		struct rte_mbuf **pkts;
-#ifdef ENABLE_STATS_IOCTL
-#ifdef NETSTAT
-		struct rte_eth_stats stats;
-		struct stats_struct ss;
-#endif
-#endif /* !ENABLE_STATS_IOCTL */
 		int cnt = dpc->wmbufs[ifidx].len;
 		pkts = dpc->wmbufs[ifidx].m_table;
-#ifdef NETSTAT
-		mtcp->nstat.tx_packets[ifidx] += cnt;
-#ifdef ENABLE_STATS_IOCTL
-		/* only pass stats after >= 1 sec interval */
-		if (abs(mtcp->cur_ts - dpc->cur_ts) >= 1000 &&
-			likely(dpc->fd >= 0))
-		{
-			/* rte_get_stats is global func, use only for 1 core */
-			if (ctxt->cpu == 0)
-			{
-				rte_eth_stats_get(portid, &stats);
-				ss.rmiss = stats.imissed;
-				ss.rerr = stats.ierrors;
-				ss.terr = stats.oerrors;
-			}
-			else
-				ss.rmiss = ss.rerr = ss.terr = 0;
 
-			ss.tx_pkts = mtcp->nstat.tx_packets[ifidx];
-			ss.tx_bytes = mtcp->nstat.tx_bytes[ifidx];
-			ss.rx_pkts = mtcp->nstat.rx_packets[ifidx];
-			ss.rx_bytes = mtcp->nstat.rx_bytes[ifidx];
-			ss.qid = ctxt->cpu;
-			ss.dev = portid;
-			/* pass the info now */
-			if (ioctl(dpc->fd, SEND_STATS, &ss) == -1)
-				TRACE_ERROR("Can't update iface stats!\n");
-			dpc->cur_ts = mtcp->cur_ts;
-			if (ctxt->cpu == 0)
-				rte_eth_stats_reset(portid);
-		}
-#endif /* !ENABLE_STATS_IOCTL */
-#endif
 		// printf("send cnt(%d)\n", cnt);
 		do
 		{
@@ -402,17 +363,11 @@ uint8_t *
 dpdk_get_wptr(struct mtcp_thread_context *ctxt, int ifidx, uint16_t pktsize)
 {
 	struct dpdk_private_context *dpc;
-#ifdef NETSTAT
-	mtcp_manager_t mtcp;
-#endif
 	struct rte_mbuf *m;
 	uint8_t *ptr;
 	int len_of_mbuf;
 
 	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
-#ifdef NETSTAT
-	mtcp = ctxt->mtcp_manager;
-#endif
 
 	/* sanity check */
 	if (unlikely(dpc->wmbufs[ifidx].len == MAX_PKT_BURST))
@@ -429,10 +384,6 @@ dpdk_get_wptr(struct mtcp_thread_context *ctxt, int ifidx, uint16_t pktsize)
 	m->pkt_len = m->data_len = pktsize;
 	m->nb_segs = 1;
 	m->next = NULL;
-
-#ifdef NETSTAT
-	mtcp->nstat.tx_bytes[ifidx] += pktsize + ETHER_OVR;
-#endif
 
 	/* increment the len_of_mbuf var */
 	dpc->wmbufs[ifidx].len = len_of_mbuf + 1;
