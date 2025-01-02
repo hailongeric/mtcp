@@ -57,9 +57,9 @@ CalculateOptionLength(uint8_t flags)
 		}
 #endif
 	}
-
-	assert(optlen % 4 == 0);
-
+	// ! hl opt
+	// assert(optlen % 4 == 0);
+	// return 0;
 	return optlen;
 }
 /*----------------------------------------------------------------------------*/
@@ -230,6 +230,10 @@ int SendTCPPacketStandalone(struct mtcp_manager *mtcp,
 	return payloadlen;
 }
 /*----------------------------------------------------------------------------*/
+
+// static char sendchar[200] = {0};
+
+
 int SendTCPPacket(struct mtcp_manager *mtcp, tcp_stream *cur_stream,
 				  uint32_t cur_ts, uint8_t flags, uint8_t *payload, uint16_t payloadlen)
 {
@@ -252,7 +256,13 @@ int SendTCPPacket(struct mtcp_manager *mtcp, tcp_stream *cur_stream,
 	{
 		return -2;
 	}
-	memset(tcph, 0, TCP_HEADER_LEN + optlen);
+	// memset(tcph, 0, TCP_HEADER_LEN + optlen);
+	// ! hl opt
+	// memset(tcph+12, 0, TCP_HEADER_LEN );
+	*((uint32_t *)&(tcph->ack_seq) + 1) = 0;
+	// tcph->psh = TRUE;
+
+	// memset(tcph, 0, TCP_HEADER_LEN );
 
 	tcph->source = cur_stream->sport;
 	tcph->dest = cur_stream->dport;
@@ -330,6 +340,7 @@ int SendTCPPacket(struct mtcp_manager *mtcp, tcp_stream *cur_stream,
 		cur_stream->need_wnd_adv = TRUE;
 	}
 
+	//! hl opt
 	GenerateTCPOptions(cur_stream, cur_ts, flags,
 					   (uint8_t *)tcph + TCP_HEADER_LEN, optlen);
 
@@ -337,10 +348,41 @@ int SendTCPPacket(struct mtcp_manager *mtcp, tcp_stream *cur_stream,
 	// copy payload if exist
 	if (payloadlen > 0)
 	{
-		memcpy((uint8_t *)tcph + TCP_HEADER_LEN + optlen, payload, payloadlen);
-#if defined(NETSTAT) && defined(ENABLELRO)
-		mtcp->nstat.tx_gdptbytes += payloadlen;
-#endif /* NETSTAT */
+		// memcpy((uint8_t *)tcph + TCP_HEADER_LEN + optlen, payload, payloadlen);
+		// SBget((uint8_t *)tcph + TCP_HEADER_LEN + optlen, cur_stream, payload, payloadlen);
+
+		struct tcp_send_buffer *sndbuf = cur_stream->sndvar->sndbuf;
+		if ((unsigned long)payload >= (unsigned long)sndbuf->data + sndbuf->size)
+		{
+			payload -= sndbuf->size;
+		}
+		if ((unsigned long)payload + payloadlen <= (unsigned long)sndbuf->data + sndbuf->size)
+		{
+			rte_memcpy((uint8_t *)tcph + TCP_HEADER_LEN + optlen, payload, payloadlen);
+		}
+		else
+		{
+			size_t len1 = (unsigned long)sndbuf->data + sndbuf->size - (unsigned long)payload;
+			rte_memcpy((uint8_t *)tcph + TCP_HEADER_LEN + optlen, payload, len1);
+			rte_memcpy((uint8_t *)tcph + TCP_HEADER_LEN + optlen + len1, sndbuf->data, payloadlen - len1);
+		}
+
+		// if (mtcp->ctx->cpu == 0)
+		// {
+		// 	int idid = cur_stream->socket->id;
+		// 	char cc = payload[0];
+		// 	// if (idid == 4)
+		// 	// {
+		// 	// 	printf("dstport(%d) idid(%d) cc(%d) sendchar[idid](%d) payloadlen(%d) paddr(%p)\n", ((tcph->dest & 0xff) << 8) | ((tcph->dest >> 8) & 0xff), idid, cc, sendchar[idid], payloadlen, payload);
+		// 	// }
+		// 	// if (cc != sendchar[idid] && idid == 4)
+		// 	// {
+		// 	// 	printf("dstport(%d) idid(%d) cc(%d) sendchar[idid](%d) payloadlen(%d) paddr(%p)\n", ((tcph->dest & 0xff) << 8) | ((tcph->dest >> 8) & 0xff), idid, cc, sendchar[idid], payloadlen, payload);
+		// 	// 	exit(0);
+		// 	// }
+		// 	sendchar[idid] = (cc + 1) & 0xff;
+		// }
+		cur_stream->snd_nxt += payloadlen;
 	}
 
 #if TCP_CALCULATE_CHECKSUM
@@ -354,8 +396,6 @@ int SendTCPPacket(struct mtcp_manager *mtcp, tcp_stream *cur_stream,
 									  TCP_HEADER_LEN + optlen + payloadlen,
 									  cur_stream->saddr, cur_stream->daddr);
 #endif
-
-	cur_stream->snd_nxt += payloadlen;
 
 	if (tcph->syn || tcph->fin)
 	{
@@ -401,9 +441,9 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 		assert(0);
 		return 0;
 	}
-#ifndef EABLE_COROUTINE
-	SBUF_LOCK(&sndvar->write_lock);
-#endif
+	// #ifndef EABLE_COROUTINE
+	// 	SBUF_LOCK(&sndvar->write_lock);
+	// #endif
 	if (sndvar->sndbuf->len == 0)
 	{
 		packets = 0;
@@ -416,6 +456,7 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 		// seq = cur_stream->snd_nxt;
 		data = sndvar->sndbuf->head + (seq - sndvar->sndbuf->head_seq);
 		len = sndvar->sndbuf->len - (seq - sndvar->sndbuf->head_seq);
+
 		/* sanity check */
 		if (TCP_SEQ_LT(seq, sndvar->sndbuf->head_seq))
 		{
@@ -450,14 +491,13 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 #if TCP_OPT_SACK_ENABLED
 		if (SeqIsSacked(cur_stream, seq))
 		{
-			TRACE_DBG("!! SKIPPING %u\n", seq - sndvar->iss);
+			printf("!! SKIPPING %u\n", seq - sndvar->iss);
 			cur_stream->snd_nxt += len;
 			continue;
 		}
 #endif
 
 		remaining_window = MIN(sndvar->cwnd, sndvar->peer_wnd) - (seq - sndvar->snd_una);
-		// printf("remaining_window(%d) sndvar->cwnd(%d) sndvar->peer_wnd (%d) mss(%d)\n", remaining_window, sndvar->cwnd, sndvar->peer_wnd, sndvar->mss);
 		/* if there is no space in the window */
 		if (remaining_window <= 0 ||
 			(remaining_window < sndvar->mss && seq - sndvar->snd_una > 0))
@@ -470,6 +510,8 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 				else
 					wack_sent = 1;
 			}
+			// printf("remaining_window(%d) sndvar->cwnd(%d) sndvar->peer_wnd (%d) mss(%d)\n", remaining_window, sndvar->cwnd, sndvar->peer_wnd, sndvar->mss);
+
 			packets = -3;
 			goto out;
 		}
@@ -479,31 +521,36 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 		/* payload size limited by TCP MSS */
 		pkt_len = MIN(len, sndvar->mss - CalculateOptionLength(TCP_FLAG_ACK));
 
-#if RATE_LIMIT_ENABLED
-		// update rate
-		if (cur_stream->rcvvar->srtt)
-		{
-			cur_stream->bucket->rate =
-				(uint32_t)(SECONDS_TO_USECS(										  // bits / s = mbps
-					BYTES_TO_BITS(													  // bits / us
-						(double)sndvar->cwnd / UNSHIFT_SRTT(cur_stream->rcvvar->srtt) // bytes / us
-						)));
-		}
-		if (cur_stream->bucket->rate != 0 && (SufficientTokens(cur_stream->bucket, pkt_len * 8) < 0))
-		{
-			packets = -3;
-			goto out;
-		}
-#endif
+		// #if RATE_LIMIT_ENABLED
+		// 		// update rate
+		// 		if (cur_stream->rcvvar->srtt)
+		// 		{
+		// 			cur_stream->bucket->rate =
+		// 				(uint32_t)(SECONDS_TO_USECS(										  // bits / s = mbps
+		// 					BYTES_TO_BITS(													  // bits / us
+		// 						(double)sndvar->cwnd / UNSHIFT_SRTT(cur_stream->rcvvar->srtt) // bytes / us
+		// 						)));
+		// 		}
+		// 		if (cur_stream->bucket->rate != 0 && (SufficientTokens(cur_stream->bucket, pkt_len * 8) < 0))
+		// 		{
+		// 			packets = -3;
+		// 			goto out;
+		// 		}
+		// #endif
 
-#if PACING_ENABLED
-		if (!CanSendNow(cur_stream->pacer))
-		{
-			packets = -3;
-			goto out;
-		}
-#endif
+		// #if PACING_ENABLED
+		// 		if (!CanSendNow(cur_stream->pacer))
+		// 		{
+		// 			packets = -3;
+		// 			goto out;
+		// 		}
+		// #endif
 		// printf("pkt_len %d\n",pkt_len);
+		// if (cur_stream->socket->id == 4 && mtcp->ctx->cpu == 0)
+		// {
+		// 	printf("seq(%d) len(%d) sndbuf->head_seq(%d) sndbuf->head(%p) data(%p)\n", seq, len, sndvar->sndbuf->head_seq, sndvar->sndbuf->head, data);
+		// }
+
 		if ((sndlen = SendTCPPacket(mtcp, cur_stream, cur_ts,
 									TCP_FLAG_ACK, data, pkt_len)) < 0)
 		{
@@ -512,13 +559,15 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 			packets = -3;
 			goto out;
 		}
+		// printf("sndlen(%d)\n", sndlen);
 		packets++;
 	}
 
 out:
-#ifndef EABLE_COROUTINE
-	SBUF_UNLOCK(&sndvar->write_lock);
-#endif
+	// #ifndef EABLE_COROUTINE
+	// 	SBUF_UNLOCK(&sndvar->write_lock);
+	// #endif
+	// printf("packets(%d)\n", packets);
 	return packets;
 }
 /*----------------------------------------------------------------------------*/
@@ -710,11 +759,14 @@ WriteTCPDataList(mtcp_manager_t mtcp,
 	cnt = 0;
 	cur_stream = TAILQ_FIRST(&sender->send_list);
 	last = TAILQ_LAST(&sender->send_list, send_head);
+	//  asm volatile("" ::: "memory");
 	while (cur_stream)
 	{
 		// printf("enter write TCP DATA cwnd(%d)\n", cur_stream->sndvar->cwnd);
-		if (++cnt > thresh)
+		if (++cnt > thresh){
+			printf("break write TCP DATA cwnd(%d)\n", cur_stream->sndvar->cwnd);
 			break;
+		}
 		TRACE_LOOP("Inside send loop. cnt: %u, stream: %d\n",
 				   cnt, cur_stream->id);
 		next = TAILQ_NEXT(cur_stream, sndvar->send_link);

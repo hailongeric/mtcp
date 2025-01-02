@@ -112,7 +112,6 @@ IPOutputStandalone(struct mtcp_manager *mtcp, uint8_t protocol,
 	/* otherwise calculate IP checksum in S/W */
 	if (rc == -1)
 		iph->check = ip_fast_csum(iph, iph->ihl);
-	// printf("[+] checsum result (%#x)\n", iph->check);
 #else
 	UNUSED(rc);
 	iph->check = ip_fast_csum(iph, iph->ihl);
@@ -121,6 +120,7 @@ IPOutputStandalone(struct mtcp_manager *mtcp, uint8_t protocol,
 	return (uint8_t *)(iph + 1);
 }
 /*----------------------------------------------------------------------------*/
+// ! hl focus here, this is the function that is called to send the packet
 uint8_t *
 IPOutput(struct mtcp_manager *mtcp, tcp_stream *stream, uint16_t tcplen)
 {
@@ -172,6 +172,7 @@ IPOutput(struct mtcp_manager *mtcp, tcp_stream *stream, uint16_t tcplen)
 	iph->saddr = stream->saddr;
 	iph->daddr = stream->daddr;
 	iph->check = 0;
+
 #ifndef DISABLE_HWCSUM
 	/* offload IP checkum if possible */
 

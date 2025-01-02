@@ -16,7 +16,9 @@ struct tcp_send_buffer
 	uint32_t head_off;
 	uint32_t tail_off;
 	uint32_t len;
+	uint32_t ed_off;
 	uint64_t cum_len;
+	uint32_t unused;
 	uint32_t size;
 
 	uint32_t head_seq;
@@ -42,4 +44,7 @@ size_t
 SBRemove(sb_manager_t sbm, struct tcp_send_buffer *buf, size_t len);
 /*----------------------------------------------------------------------------*/
 
+
+// size_t 
+// SBGet(uint8_t *dest,tcp_stream *cur_stream,uint8_t *payload,size_t payload_len);
 #endif /* TCP_SEND_BUFFER_H */

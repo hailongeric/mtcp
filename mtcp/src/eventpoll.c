@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+#include <sched.h>
 #include <sys/queue.h>
 #include <unistd.h>
 #include <time.h>
@@ -666,6 +668,8 @@ wait:
 #ifndef EABLE_COROUTINE
 	pthread_mutex_unlock(&ep->epoll_lock);
 #endif
+	assert(mctx->cpu + 1 == sched_getcpu());
+	// printf("mtcp write CPU %d pid (%d)  mtcp->flow_cnt(%d) phyid(%d)\n", mctx->cpu, gettid(),  mtcp->flow_cnt, sched_getcpu());
 	return cnt;
 }
 /*----------------------------------------------------------------------------*/

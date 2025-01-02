@@ -956,19 +956,15 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 					// printf("[+] MTCP Recv Packet with length %u, process on core %d\n", len, ctx->cpu);
 					// ! in accelTCP why use mm_prefetch to fetch pktbuf
 					ProcessPacket(mtcp, rx_inf, ts, pktbuf, len);
+					
 
 					/* send packets from write buffer */
 					/* send until tx is available */
+					// mtcp->iom->send_pkts(ctx, 0, TRY_SEND);
 				}
-#ifdef NETSTAT
-				else
-					mtcp->nstat.rx_errors[rx_inf]++;
-#endif
 			}
-
-			mtcp->iom->send_pkts(ctx, 0,0);
+			mtcp->iom->send_pkts(ctx, 0, TRY_SEND);
 		}
-		STAT_COUNT(mtcp->runstat.rounds_rx);
 
 		/* interaction with application */
 		if (mtcp->flow_cnt > 0)
@@ -981,17 +977,22 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 			 */
 
 			CheckRtmTimeout(mtcp, ts, thresh);
+			// mtcp->iom->send_pkts(ctx, 0, TRY_SEND);
 			CheckTimewaitExpire(mtcp, ts, thresh);
+			// mtcp->iom->send_pkts(ctx, 0, TRY_SEND);
 			if (CONFIG.tcp_timeout > 0 && ts != ts_prev)
 			{
 				CheckConnectionTimeout(mtcp, ts, thresh);
 			}
+			// mtcp->iom->send_pkts(ctx, 0, FORCE_SEND);
 		}
+		// mtcp->iom->send_pkts(ctx, 0, TRY_SEND);
 
 		/* if epoll is in use, flush all the queued events */
 		if (mtcp->ep)
 		{
 			FlushEpollEvents(mtcp, ts);
+			// mtcp->iom->send_pkts(ctx, 0, TRY_SEND);
 		}
 
 		if (mtcp->flow_cnt > 0)
@@ -1007,7 +1008,7 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 #endif
 		}
 
-		mtcp->iom->send_pkts(ctx, 0,0);
+		// mtcp->iom->send_pkts(ctx, 0, TRY_SEND);
 
 		WritePacketsToChunks(mtcp, ts);
 
@@ -1015,9 +1016,13 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 		/* send until tx is available */
 		// for (tx_inf = 0; tx_inf < CONFIG.eths_num; tx_inf++)
 		// {
-			// printf("send pkt\n");
-			mtcp->iom->send_pkts(ctx, 0,0);
-		// }
+		// printf("send pkt\n");
+		mtcp->iom->send_pkts(ctx, 0, FORCE_SEND);
+		// #define _GNU_SOURCE
+		// #include <sched.h> 
+		// #include <unistd.h>
+		// printf("CPU %d pid (%d) CONFIG.eths_num(%d) mtcp->flow_cnt(%d) phyid(%d)\r", ctx->cpu, gettid(), CONFIG.eths_num, mtcp->flow_cnt,  sched_getcpu());
+		// // }
 
 		if (ts != ts_prev)
 		{
@@ -1025,14 +1030,15 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 			if (ctx->cpu == mtcp_master)
 			{
 				ARPTimer(mtcp, ts);
-#ifdef NETSTAT
-				PrintNetworkStats(mtcp, ts);
-#endif
+				// mtcp->iom->send_pkts(ctx, 0, TRY_SEND);
+// #ifdef NETSTAT
+// 				PrintNetworkStats(mtcp, ts);
+// #endif
 			}
 		}
 
-		mtcp->iom->select(ctx);
-
+		// mtcp->iom->select(ctx);
+		
 		if (ctx->interrupt)
 		{
 			InterruptApplication(mtcp);

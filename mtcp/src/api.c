@@ -1791,6 +1791,8 @@ mtcp_write(mctx_t mctx, int sockid, const char *buf, size_t len)
 		}
 	}
 	// printf("[+]6*******************mbuf(%#lx)\n", *((long *)0x11375c100));
+
+	// printf("mtcp write CPU %d pid (%d)  mtcp->flow_cnt(%d) phyid(%d)\n", mctx->cpu, gettid(),  mtcp->flow_cnt, sched_getcpu());
 	TRACE_API("Stream %d: mtcp_write() returning %d\n", cur_stream->id, ret);
 	return ret;
 }
@@ -1871,6 +1873,11 @@ int mtcp_writev(mctx_t mctx, int sockid, const struct iovec *iov, int numIOV)
 			continue;
 
 		ret = CopyFromUser(mtcp, cur_stream, iov[i].iov_base, iov[i].iov_len);
+		// if (cur_stream->socket->id == 4 && mtcp->ctx->cpu == 0)
+		// {
+		// 	printf("cwnd(%d)snd_wnd(%d)snd_wnd_addr(%p)tail(%d) mss(%d) sendchar(%d)\n", sndvar->cwnd, sndvar->snd_wnd, sndvar->sndbuf->data + sndvar->sndbuf->tail_off, sndvar->sndbuf->tail_off, sndvar->mss, *(char *)iov[i].iov_base);
+		// }
+
 		if (ret <= 0)
 			break;
 
@@ -1918,7 +1925,6 @@ int mtcp_writev(mctx_t mctx, int sockid, const struct iovec *iov, int numIOV)
 #endif
 		}
 	}
-
 	TRACE_API("Stream %d: mtcp_writev() returning %d\n",
 			  cur_stream->id, to_write);
 	return to_write;

@@ -56,6 +56,11 @@ struct mtcp_thread_context;
  *                 dev_ioctl()      : contains submodules for select drivers
  *
  */
+
+#define TRY_SEND 0
+#define FORCE_SEND 1
+#define TRY_COUNT 2
+
 typedef struct io_module_func
 {
 	void (*load_module)(void);

@@ -261,16 +261,6 @@ struct mtcp_manager
 	/* statistics */
 	struct bcast_stat bstat;
 	struct timeout_stat tstat;
-#ifdef NETSTAT
-	struct net_stat nstat;
-	struct net_stat p_nstat;
-	uint32_t p_nstat_ts;
-
-	struct run_stat runstat;
-	struct run_stat p_runstat;
-
-	struct time_stat rtstat;
-#endif /* NETSTAT */
 	struct io_module_func *iom;
 };
 /*----------------------------------------------------------------------------*/
