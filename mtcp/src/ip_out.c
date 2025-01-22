@@ -121,8 +121,13 @@ IPOutputStandalone(struct mtcp_manager *mtcp, uint8_t protocol,
 }
 /*----------------------------------------------------------------------------*/
 // ! hl focus here, this is the function that is called to send the packet
+#ifdef ZERO_COPY_VERSION
+uint8_t *
+IPOutput(struct mtcp_manager *mtcp, tcp_stream *stream, struct mtcp_zc_mbuf *zc_mbuf, uint16_t tcplen)
+#else
 uint8_t *
 IPOutput(struct mtcp_manager *mtcp, tcp_stream *stream, uint16_t tcplen)
+#endif
 {
 	struct iphdr *iph;
 	int nif;
@@ -155,8 +160,21 @@ IPOutput(struct mtcp_manager *mtcp, tcp_stream *stream, uint16_t tcplen)
 				   stream->sndvar->nif_out, mtcp->cur_ts);
 		return NULL;
 	}
+#ifdef ZERO_COPY_VERSION
+	if (zc_mbuf != NULL)
+	{
+		iph = (struct iphdr *)ZC_EthernetOutput(mtcp, ETH_P_IP,
+												stream->sndvar->nif_out, haddr, zc_mbuf, tcplen + IP_HEADER_LEN);
+	}
+	else
+	{
+		iph = (struct iphdr *)EthernetOutput(mtcp, ETH_P_IP,
+											 stream->sndvar->nif_out, haddr, tcplen + IP_HEADER_LEN);
+	}
+#else
 	iph = (struct iphdr *)EthernetOutput(mtcp, ETH_P_IP,
 										 stream->sndvar->nif_out, haddr, tcplen + IP_HEADER_LEN);
+#endif
 	if (!iph)
 	{
 		return NULL;
@@ -175,22 +193,22 @@ IPOutput(struct mtcp_manager *mtcp, tcp_stream *stream, uint16_t tcplen)
 
 #ifndef DISABLE_HWCSUM
 	/* offload IP checkum if possible */
-
-	if (mtcp->iom->dev_ioctl != NULL)
-	{
-		switch (iph->protocol)
-		{
-		case IPPROTO_TCP:
-			rc = mtcp->iom->dev_ioctl(mtcp->ctx, nif, PKT_TX_TCPIP_CSUM_PEEK, iph);
-			break;
-		case IPPROTO_ICMP:
-			rc = mtcp->iom->dev_ioctl(mtcp->ctx, nif, PKT_TX_IP_CSUM, iph);
-			break;
-		}
-	}
-	/* otherwise calculate IP checksum in S/W */
-	if (rc == -1)
-		iph->check = ip_fast_csum(iph, iph->ihl);
+	//! hl opt
+	// if (mtcp->iom->dev_ioctl != NULL)
+	// {
+	// 	switch (iph->protocol)
+	// 	{
+	// 	case IPPROTO_TCP:
+	// 		rc = mtcp->iom->dev_ioctl(mtcp->ctx, nif, PKT_TX_TCPIP_CSUM_PEEK, iph);
+	// 		break;
+	// 	case IPPROTO_ICMP:
+	// 		rc = mtcp->iom->dev_ioctl(mtcp->ctx, nif, PKT_TX_IP_CSUM, iph);
+	// 		break;
+	// 	}
+	// }
+	// /* otherwise calculate IP checksum in S/W */
+	// if (rc == -1)
+	// 	iph->check = ip_fast_csum(iph, iph->ihl);
 #else
 	UNUSED(rc);
 	iph->check = ip_fast_csum(iph, iph->ihl);

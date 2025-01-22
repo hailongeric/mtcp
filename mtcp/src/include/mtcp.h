@@ -10,9 +10,16 @@
 #include <gmp.h>
 #endif
 
+#include "io_module.h"
+
+#ifdef ZERO_COPY_VERSION
+#include "zc_memory_mgt.h"
+#include "zc_tcp_send_buffer.h"
+#else
+#include "tcp_send_buffer.h"
+#endif
 #include "memory_mgt.h"
 #include "tcp_ring_buffer.h"
-#include "tcp_send_buffer.h"
 #include "tcp_stream_queue.h"
 #include "socket.h"
 #include "mtcp_api.h"
@@ -20,7 +27,6 @@
 #include "addr_pool.h"
 #include "logger.h"
 #include "stat.h"
-#include "io_module.h"
 
 #ifdef EABLE_COROUTINE
 #include "lthread.h"
@@ -38,65 +44,69 @@
 #define ERROR (-1)
 #endif
 
-#define ETHERNET_HEADER_LEN             14  // sizeof(struct ethhdr)
-#define IP_HEADER_LEN                   20  // sizeof(struct iphdr)
-#define TCP_HEADER_LEN                  20  // sizeof(struct tcphdr)
-#define TOTAL_TCP_HEADER_LEN            54  // total header length
+#define ETHERNET_HEADER_LEN 14	// sizeof(struct ethhdr)
+#define IP_HEADER_LEN 20		// sizeof(struct iphdr)
+#define TCP_HEADER_LEN 20		// sizeof(struct tcphdr)
+#define TOTAL_TCP_HEADER_LEN 54 // total header length
 
 /* configurations */
-#define BACKLOG_SIZE                    (10*1024)
-#define MAX_PKT_SIZE                    (2*1024)
-#define ETH_NUM                         MAX_DEVICES
+#define BACKLOG_SIZE (10 * 1024)
+#define MAX_PKT_SIZE (2 * 1024)
+#define ETH_NUM MAX_DEVICES
 
-#define TCP_OPT_TIMESTAMP_ENABLED       TRUE   // enabled for rtt measure
-#define TCP_OPT_SACK_ENABLED            TRUE   // only recv-side implemented
+#define TCP_OPT_TIMESTAMP_ENABLED TRUE // enabled for rtt measure
+#define TCP_OPT_SACK_ENABLED FALSE	   // only recv-side implemented
 
-#define LOCK_STREAM_QUEUE               FALSE
-#define USE_SPIN_LOCK                   TRUE
-#define INTR_SLEEPING_MTCP              TRUE
-#define PROMISCUOUS_MODE                TRUE
+#define LOCK_STREAM_QUEUE FALSE
+#define USE_SPIN_LOCK TRUE
+#define INTR_SLEEPING_MTCP TRUE
+#define PROMISCUOUS_MODE TRUE
 
 /* blocking api became obsolete */
-#define BLOCKING_SUPPORT                FALSE
+#define BLOCKING_SUPPORT FALSE
 
 #ifndef MAX_CPUS
-#define MAX_CPUS                        16
+#define MAX_CPUS 16
 #endif
 /*----------------------------------------------------------------------------*/
 /* Statistics */
 #ifdef NETSTAT
-#define NETSTAT_PERTHREAD		TRUE
-#define NETSTAT_TOTAL			TRUE
+#define NETSTAT_PERTHREAD TRUE
+#define NETSTAT_TOTAL TRUE
 #endif /* NETSTAT */
-#define RTM_STAT			FALSE
+#define RTM_STAT FALSE
 /*----------------------------------------------------------------------------*/
 /* Lock definitions for socket buffer */
 #if USE_SPIN_LOCK
-#define SBUF_LOCK_INIT(lock, errmsg, action);		\
-	if (pthread_spin_init(lock, PTHREAD_PROCESS_PRIVATE)) {		\
-		perror("pthread_spin_init" errmsg);			\
-		action;										\
+#define SBUF_LOCK_INIT(lock, errmsg, action)              \
+	;                                                     \
+	if (pthread_spin_init(lock, PTHREAD_PROCESS_PRIVATE)) \
+	{                                                     \
+		perror("pthread_spin_init" errmsg);               \
+		action;                                           \
 	}
-#define SBUF_LOCK_DESTROY(lock)	pthread_spin_destroy(lock)
-#define SBUF_LOCK(lock)			pthread_spin_lock(lock)
-#define SBUF_UNLOCK(lock)		pthread_spin_unlock(lock)
+#define SBUF_LOCK_DESTROY(lock) pthread_spin_destroy(lock)
+#define SBUF_LOCK(lock) pthread_spin_lock(lock)
+#define SBUF_UNLOCK(lock) pthread_spin_unlock(lock)
 #else
-#define SBUF_LOCK_INIT(lock, errmsg, action);		\
-	if (pthread_mutex_init(lock, NULL)) {			\
-		perror("pthread_mutex_init" errmsg);		\
-		action;										\
+#define SBUF_LOCK_INIT(lock, errmsg, action) \
+	;                                        \
+	if (pthread_mutex_init(lock, NULL))      \
+	{                                        \
+		perror("pthread_mutex_init" errmsg); \
+		action;                              \
 	}
-#define SBUF_LOCK_DESTROY(lock)	pthread_mutex_destroy(lock)
-#define SBUF_LOCK(lock)			pthread_mutex_lock(lock)
-#define SBUF_UNLOCK(lock)		pthread_mutex_unlock(lock)
+#define SBUF_LOCK_DESTROY(lock) pthread_mutex_destroy(lock)
+#define SBUF_LOCK(lock) pthread_mutex_lock(lock)
+#define SBUF_UNLOCK(lock) pthread_mutex_unlock(lock)
 #endif /* USE_SPIN_LOCK */
 
 /* add macro if it is not defined in /usr/include/sys/queue.h */
 #ifndef TAILQ_FOREACH_SAFE
-#define TAILQ_FOREACH_SAFE(var, head, field, tvar)                      \
-	for ((var) = TAILQ_FIRST((head));                               \
-	     (var) && ((tvar) = TAILQ_NEXT((var), field), 1);		\
-	     (var) = (tvar))
+#define TAILQ_FOREACH_SAFE(var, head, field, tvar)        \
+	for ((var) = TAILQ_FIRST((head));                     \
+		 (var) && ((tvar) = TAILQ_NEXT((var), field), 1); \
+		 (var) = (tvar))
 #endif
 /*----------------------------------------------------------------------------*/
 struct eth_table
@@ -106,7 +116,7 @@ struct eth_table
 	int stat_print;
 	unsigned char haddr[ETH_ALEN];
 	uint32_t netmask;
-//	unsigned char dst_haddr[ETH_ALEN];
+	//	unsigned char dst_haddr[ETH_ALEN];
 	uint32_t ip_addr;
 };
 /*----------------------------------------------------------------------------*/
@@ -143,9 +153,9 @@ struct mtcp_config
 	int eths_num;
 
 	/* route config */
-	struct route_table *rtable;		// routing table
-	struct route_table *gateway;	
-	int routes;						// # of entries
+	struct route_table *rtable; // routing table
+	struct route_table *gateway;
+	int routes; // # of entries
 
 	/* arp config */
 	struct arp_table arp;
@@ -160,7 +170,7 @@ struct mtcp_config
 	int max_num_buffers;
 	int rcvbuf_size;
 	int sndbuf_size;
-	
+
 	int tcp_timewait;
 	int tcp_timeout;
 
@@ -179,9 +189,12 @@ struct mtcp_sender
 	int ifidx;
 
 	/* TCP layer send queues */
-	TAILQ_HEAD (control_head, tcp_stream) control_list;
-	TAILQ_HEAD (send_head, tcp_stream) send_list;
-	TAILQ_HEAD (ack_head, tcp_stream) ack_list;
+	TAILQ_HEAD(control_head, tcp_stream)
+	control_list;
+	TAILQ_HEAD(send_head, tcp_stream)
+	send_list;
+	TAILQ_HEAD(ack_head, tcp_stream)
+	ack_list;
 
 	int control_list_cnt;
 	int send_list_cnt;
@@ -190,31 +203,37 @@ struct mtcp_sender
 /*----------------------------------------------------------------------------*/
 struct mtcp_manager
 {
-	mem_pool_t flow_pool;		/* memory pool for tcp_stream */
-	mem_pool_t rv_pool;			/* memory pool for recv variables */
-	mem_pool_t sv_pool;			/* memory pool for send variables */
-	mem_pool_t mv_pool;			/* memory pool for monitor variables */
+	mem_pool_t flow_pool; /* memory pool for tcp_stream */
+	mem_pool_t rv_pool;	  /* memory pool for recv variables */
+	mem_pool_t sv_pool;	  /* memory pool for send variables */
+	mem_pool_t mv_pool;	  /* memory pool for monitor variables */
 
-	//mem_pool_t socket_pool;
+// mem_pool_t socket_pool;
+#ifdef ZERO_COPY_VERSION
+	zc_sb_manager_t rbm_snd;
+#else
 	sb_manager_t rbm_snd;
+#endif
+
 	rb_manager_t rbm_rcv;
 	struct hashtable *tcp_flow_table;
 
-	uint32_t s_index:24;		/* stream index */
+	uint32_t s_index : 24; /* stream index */
 	socket_map_t smap;
-	TAILQ_HEAD (, socket_map) free_smap;
+	TAILQ_HEAD(, socket_map)
+	free_smap;
 
-	addr_pool_t ap;			/* address pool */
+	addr_pool_t ap; /* address pool */
 
-	uint32_t g_id;			/* id space in a thread */
-	uint32_t flow_cnt;		/* number of concurrent flows */
+	uint32_t g_id;	   /* id space in a thread */
+	uint32_t flow_cnt; /* number of concurrent flows */
 
-	struct mtcp_thread_context* ctx;
-	
+	struct mtcp_thread_context *ctx;
+
 	/* variables related to logger */
 	int sp_fd;
-	log_thread_context* logger;
-	log_buff* w_buffer;
+	log_thread_context *logger;
+	log_buff *w_buffer;
 	FILE *log_fp;
 
 	/* variables related to event */
@@ -223,32 +242,36 @@ struct mtcp_manager
 
 	struct hashtable *listeners;
 
-	stream_queue_t connectq;				/* streams need to connect */
-	stream_queue_t sendq;				/* streams need to send data */
-	stream_queue_t ackq;					/* streams need to send ack */
+	stream_queue_t connectq; /* streams need to connect */
+	stream_queue_t sendq;	 /* streams need to send data */
+	stream_queue_t ackq;	 /* streams need to send ack */
 
-	stream_queue_t closeq;				/* streams need to close */
-	stream_queue_int *closeq_int;		/* internally maintained closeq */
-	stream_queue_t resetq;				/* streams need to reset */
-	stream_queue_int *resetq_int;		/* internally maintained resetq */
-	
-	stream_queue_t destroyq;				/* streams need to be destroyed */
+	stream_queue_t closeq;		  /* streams need to close */
+	stream_queue_int *closeq_int; /* internally maintained closeq */
+	stream_queue_t resetq;		  /* streams need to reset */
+	stream_queue_int *resetq_int; /* internally maintained resetq */
+
+	stream_queue_t destroyq; /* streams need to be destroyed */
 
 	struct mtcp_sender *g_sender;
 	struct mtcp_sender *n_sender[ETH_NUM];
 
 	/* lists related to timeout */
-	struct rto_hashstore* rto_store;
-	TAILQ_HEAD (timewait_head, tcp_stream) timewait_list;
-	TAILQ_HEAD (timeout_head, tcp_stream) timeout_list;
+	struct rto_hashstore *rto_store;
+	TAILQ_HEAD(timewait_head, tcp_stream)
+	timewait_list;
+	TAILQ_HEAD(timeout_head, tcp_stream)
+	timeout_list;
 
 	int rto_list_cnt;
 	int timewait_list_cnt;
 	int timeout_list_cnt;
 
 #if BLOCKING_SUPPORT
-	TAILQ_HEAD (rcv_br_head, tcp_stream) rcv_br_list;
-	TAILQ_HEAD (snd_br_head, tcp_stream) snd_br_list;
+	TAILQ_HEAD(rcv_br_head, tcp_stream)
+	rcv_br_list;
+	TAILQ_HEAD(snd_br_head, tcp_stream)
+	snd_br_list;
 	int rcv_br_list_cnt;
 	int snd_br_list_cnt;
 #endif
@@ -264,9 +287,9 @@ struct mtcp_manager
 	struct io_module_func *iom;
 };
 /*----------------------------------------------------------------------------*/
-typedef struct mtcp_manager* mtcp_manager_t;
+typedef struct mtcp_manager *mtcp_manager_t;
 /*----------------------------------------------------------------------------*/
-mtcp_manager_t 
+mtcp_manager_t
 GetMTCPManager(mctx_t mctx);
 /*----------------------------------------------------------------------------*/
 struct mtcp_thread_context
@@ -275,13 +298,13 @@ struct mtcp_thread_context
 #ifndef EABLE_COROUTINE
 	pthread_t thread;
 #else
-    lthread_t thread;
+	lthread_t thread;
 #endif
-	uint8_t done:1, 
-			exit:1, 
-			interrupt:1;
+	uint8_t done : 1,
+		exit : 1,
+		interrupt : 1;
 
-	struct mtcp_manager* mtcp_manager;
+	struct mtcp_manager *mtcp_manager;
 
 	void *io_private_context;
 	pthread_mutex_t smap_lock;
@@ -307,11 +330,18 @@ struct mtcp_thread_context
 #endif /* LOCK_STREAM_QUEUE */
 };
 /*----------------------------------------------------------------------------*/
-typedef struct mtcp_thread_context* mtcp_thread_context_t;
+typedef struct mtcp_thread_context *mtcp_thread_context_t;
 /*----------------------------------------------------------------------------*/
 extern struct mtcp_manager *g_mtcp[MAX_CPUS];
 extern struct mtcp_config CONFIG;
 extern addr_pool_t ap[ETH_NUM];
 /*----------------------------------------------------------------------------*/
+
+#ifdef ZERO_COPY_VERSION
+/* zero ccopy API begin */
+int mtcp_zc_mbuf_get(struct mtcp_zc_mbuf *m, int len);
+int mtcp_zc_mbuf_write(struct mtcp_zc_mbuf *m, const char *data, int len);
+
+#endif
 
 #endif /* MTCP_H */

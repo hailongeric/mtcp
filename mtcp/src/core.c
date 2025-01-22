@@ -13,7 +13,6 @@
 #include "cpu.h"
 #include "eth_in.h"
 #include "fhash.h"
-#include "tcp_send_buffer.h"
 #include "tcp_ring_buffer.h"
 #include "socket.h"
 #include "eth_out.h"
@@ -27,6 +26,8 @@
 #include "ip_out.h"
 #include "timer.h"
 #include "debug.h"
+#include "zc_tcp_send_buffer.h"
+#include "tcp_send_buffer.h"
 
 #ifdef EABLE_COROUTINE
 #include "lthread_api.h"
@@ -904,6 +905,7 @@ InterruptApplication(mtcp_manager_t mtcp)
 // //              : "=r"(result));
 // static struct timeval hl_time = {0};
 /*----------------------------------------------------------------------------*/
+// #define MAX_PKT_BURST 128 
 static void
 RunMainLoop(struct mtcp_thread_context *ctx)
 {
@@ -916,6 +918,8 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 	int thresh = CONFIG.max_concurrency;
 	static uint16_t len;
 	static uint8_t *pktbuf;
+	// static uint16_t len[MAX_PKT_BURST];
+	// uint8_t *pktbuf[MAX_PKT_BURST];
 
 	gettimeofday(&cur_ts, NULL);
 	TRACE_DBG("CPU %d: mtcp thread running.\n", ctx->cpu);
@@ -947,7 +951,8 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 
 			recv_cnt = mtcp->iom->recv_pkts(ctx, rx_inf);
 			STAT_COUNT(mtcp->runstat.rounds_rx_try);
-
+			// printf("recv_cnt(%d)\n", recv_cnt);
+			int idx = 0;
 			for (i = 0; i < recv_cnt; i++)
 			{
 				pktbuf = mtcp->iom->get_rptr(mtcp->ctx, rx_inf, i, &len);
@@ -956,13 +961,17 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 					// printf("[+] MTCP Recv Packet with length %u, process on core %d\n", len, ctx->cpu);
 					// ! in accelTCP why use mm_prefetch to fetch pktbuf
 					ProcessPacket(mtcp, rx_inf, ts, pktbuf, len);
-					
+					// rte_prefetch0(pktbuf[idx]);
+					// idx++;
 
 					/* send packets from write buffer */
 					/* send until tx is available */
 					// mtcp->iom->send_pkts(ctx, 0, TRY_SEND);
 				}
 			}
+			// mtcp->iom->send_pkts(ctx, 0, TRY_SEND);
+			// for (i = 0; i < idx; i++)
+			// 	ProcessPacket(mtcp, rx_inf, ts, pktbuf[i], len[i]);
 			mtcp->iom->send_pkts(ctx, 0, TRY_SEND);
 		}
 
@@ -1019,7 +1028,7 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 		// printf("send pkt\n");
 		mtcp->iom->send_pkts(ctx, 0, FORCE_SEND);
 		// #define _GNU_SOURCE
-		// #include <sched.h> 
+		// #include <sched.h>
 		// #include <unistd.h>
 		// printf("CPU %d pid (%d) CONFIG.eths_num(%d) mtcp->flow_cnt(%d) phyid(%d)\r", ctx->cpu, gettid(), CONFIG.eths_num, mtcp->flow_cnt,  sched_getcpu());
 		// // }
@@ -1031,14 +1040,14 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 			{
 				ARPTimer(mtcp, ts);
 				// mtcp->iom->send_pkts(ctx, 0, TRY_SEND);
-// #ifdef NETSTAT
-// 				PrintNetworkStats(mtcp, ts);
-// #endif
+				// #ifdef NETSTAT
+				// 				PrintNetworkStats(mtcp, ts);
+				// #endif
 			}
 		}
 
 		// mtcp->iom->select(ctx);
-		
+
 		if (ctx->interrupt)
 		{
 			InterruptApplication(mtcp);
@@ -1122,12 +1131,14 @@ InitializeMTCPManager(struct mtcp_thread_context *ctx)
 	sprintf(pool_name, "flow_pool_%d", ctx->cpu);
 	mtcp->flow_pool = MPCreate(pool_name, sizeof(tcp_stream),
 							   sizeof(tcp_stream) * CONFIG.max_concurrency);
+
 	if (!mtcp->flow_pool)
 	{
 		CTRACE_ERROR("Failed to allocate tcp flow pool.\n");
 		return NULL;
 	}
 	sprintf(pool_name, "rv_pool_%d", ctx->cpu);
+
 	mtcp->rv_pool = MPCreate(pool_name, sizeof(struct tcp_recv_vars),
 							 sizeof(struct tcp_recv_vars) * CONFIG.max_concurrency);
 	if (!mtcp->rv_pool)
@@ -1143,8 +1154,11 @@ InitializeMTCPManager(struct mtcp_thread_context *ctx)
 		CTRACE_ERROR("Failed to allocate tcp send variable pool.\n");
 		return NULL;
 	}
-
+#ifdef ZERO_COPY_VERSION
+	mtcp->rbm_snd = ZC_SBManagerCreate(mtcp, CONFIG.sndbuf_size, CONFIG.max_num_buffers);
+#else
 	mtcp->rbm_snd = SBManagerCreate(mtcp, CONFIG.sndbuf_size, CONFIG.max_num_buffers);
+#endif
 	if (!mtcp->rbm_snd)
 	{
 		CTRACE_ERROR("Failed to create send ring buffer.\n");

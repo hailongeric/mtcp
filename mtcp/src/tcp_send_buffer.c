@@ -37,13 +37,9 @@ SBManagerCreate(mtcp_manager_t mtcp, size_t chunk_size, uint32_t cnum)
 
 	sbm->chunk_size = chunk_size;
 	sbm->cnum = cnum;
-#if !defined(DISABLE_DPDK)
 	char pool_name[RTE_MEMPOOL_NAMESIZE];
 	sprintf(pool_name, "sbm_pool_%d", mtcp->ctx->cpu);
 	sbm->mp = (mem_pool_t)MPCreate(pool_name, chunk_size, (uint64_t)chunk_size * cnum);
-#else
-	sbm->mp = (mem_pool_t)MPCreate(chunk_size, (uint64_t)chunk_size * cnum);
-#endif
 	if (!sbm->mp)
 	{
 		TRACE_ERROR("Failed to create mem pool for sb.\n");
@@ -63,6 +59,9 @@ SBManagerCreate(mtcp_manager_t mtcp, size_t chunk_size, uint32_t cnum)
 	return sbm;
 }
 /*----------------------------------------------------------------------------*/
+
+#ifdef ZEROCOPY
+
 struct tcp_send_buffer *
 SBInit(sb_manager_t sbm, uint32_t init_seq)
 {
@@ -98,6 +97,45 @@ SBInit(sb_manager_t sbm, uint32_t init_seq)
 
 	return buf;
 }
+
+#else
+
+struct tcp_send_buffer *
+SBInit(sb_manager_t sbm, uint32_t init_seq)
+{
+	struct tcp_send_buffer *buf;
+
+	/* first try dequeue from free buffer queue */
+	buf = SBDequeue(sbm->freeq);
+	if (!buf)
+	{
+		buf = (struct tcp_send_buffer *)malloc(sizeof(struct tcp_send_buffer));
+		if (!buf)
+		{
+			perror("malloc() for buf");
+			return NULL;
+		}
+		buf->data = MPAllocateChunk(sbm->mp);
+		if (!buf->data)
+		{
+			TRACE_ERROR("Failed to fetch memory chunk for data.\n");
+			free(buf);
+			return NULL;
+		}
+		sbm->cur_num++;
+	}
+
+	buf->head = buf->data;
+
+	buf->head_off = buf->tail_off = 0;
+	buf->len = buf->cum_len = 0;
+	buf->size = sbm->chunk_size;
+
+	buf->init_seq = buf->head_seq = init_seq;
+
+	return buf;
+}
+#endif
 /*----------------------------------------------------------------------------*/
 #if 0
 static void 

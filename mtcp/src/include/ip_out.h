@@ -14,7 +14,12 @@ uint8_t *
 IPOutputStandalone(struct mtcp_manager *mtcp, uint8_t protocol, 
 		uint16_t ip_id, uint32_t saddr, uint32_t daddr, uint16_t tcplen);
 
+#ifdef ZERO_COPY_VERSION
+uint8_t *
+IPOutput(struct mtcp_manager *mtcp, tcp_stream *stream, struct mtcp_zc_mbuf *zc_mbuf, uint16_t tcplen);
+#else
 uint8_t *
 IPOutput(struct mtcp_manager *mtcp, tcp_stream *stream, uint16_t tcplen);
+#endif
 
 #endif /* IP_OUT_H */

@@ -3,7 +3,13 @@
 #include "tcp_in.h"
 #include "tcp_out.h"
 #include "tcp_ring_buffer.h"
+
+#ifdef ZERO_COPY_VERSION
+#include "zc_tcp_send_buffer.h"
+#else
 #include "tcp_send_buffer.h"
+#endif
+
 #include "eventpoll.h"
 #include "ip_out.h"
 #include "timer.h"
@@ -561,7 +567,11 @@ void DestroyTCPStream(mtcp_manager_t mtcp, tcp_stream *stream)
 	/* free ring buffers */
 	if (stream->sndvar->sndbuf)
 	{
+#ifdef ZERO_COPY_VERSION
+		ZC_SBFree(mtcp->rbm_snd, stream->sndvar->sndbuf);
+#else
 		SBFree(mtcp->rbm_snd, stream->sndvar->sndbuf);
+#endif
 		stream->sndvar->sndbuf = NULL;
 	}
 	if (stream->rcvvar->rcvbuf)

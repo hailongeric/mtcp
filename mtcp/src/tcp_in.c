@@ -514,9 +514,7 @@ ProcessACK(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_ts,
 		sndvar->rstat.ack_upd_bytes += (ack_seq - cur_stream->snd_nxt);
 #endif
 		// fast retransmission exit: cwnd=ssthresh
-		// printf("[+]8*******************cwnd(%d)\n", *((int *)0x10b4b3b38));
 		cur_stream->sndvar->cwnd = cur_stream->sndvar->ssthresh;
-		// printf("[+]9*******************cwnd(%d)\n", *((int *)0x10b4b3b38));
 		TRACE_LOSS("Updating snd_nxt from %u to %u\n", cur_stream->snd_nxt, ack_seq);
 		cur_stream->snd_nxt = ack_seq;
 		TRACE_DBG("Sending again..., ack_seq=%u sndlen=%u cwnd=%u\n",
@@ -603,10 +601,18 @@ ProcessACK(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_ts,
 		}
 #endif
 
+#ifdef ZERO_COPY_VERSION
+		ret = ZC_SBRemove(mtcp->rbm_snd, sndvar->sndbuf, rmlen);
+#else
 		ret = SBRemove(mtcp->rbm_snd, sndvar->sndbuf, rmlen);
+#endif
 		sndvar->snd_una = ack_seq;
 		snd_wnd_prev = sndvar->snd_wnd;
+#ifdef ZERO_COPY_VERSION
+		sndvar->snd_wnd = (sndvar->sndbuf->size - sndvar->sndbuf->q_len-1) * ZC_PKT_SIZE;
+#else
 		sndvar->snd_wnd = sndvar->sndbuf->size - sndvar->sndbuf->len;
+#endif
 		/* If there was no available sending window */
 		/* notify the newly available window to application */
 #if SELECTIVE_WRITE_EVENT_NOTIFY
@@ -1349,25 +1355,26 @@ int ProcessTCPPacket(mtcp_manager_t mtcp,
 	if (ip_len < ((iph->ihl + tcph->doff) << 2))
 		return ERROR;
 
-#if VERIFY_RX_CHECKSUM
-#ifndef DISABLE_HWCSUM
-	if (mtcp->iom->dev_ioctl != NULL)
-		rc = mtcp->iom->dev_ioctl(mtcp->ctx, ifidx,
-								  PKT_RX_TCP_CSUM, NULL);
-#endif
-	if (rc == -1)
-	{
-		check = TCPCalcChecksum((uint16_t *)tcph,
-								(tcph->doff << 2) + payloadlen, iph->saddr, iph->daddr);
-		if (check)
-		{
-			TRACE_DBG("Checksum Error: Original: 0x%04x, calculated: 0x%04x\n",
-					  tcph->check, TCPCalcChecksum((uint16_t *)tcph, (tcph->doff << 2) + payloadlen, iph->saddr, iph->daddr));
-			tcph->check = 0;
-			return ERROR;
-		}
-	}
-#endif
+// ! hl modidfy 
+// #if VERIFY_RX_CHECKSUM
+// #ifndef DISABLE_HWCSUM
+// 	if (mtcp->iom->dev_ioctl != NULL)
+// 		rc = mtcp->iom->dev_ioctl(mtcp->ctx, ifidx,
+// 								  PKT_RX_TCP_CSUM, NULL);
+// #endif
+// 	if (rc == -1)
+// 	{
+// 		check = TCPCalcChecksum((uint16_t *)tcph,
+// 								(tcph->doff << 2) + payloadlen, iph->saddr, iph->daddr);
+// 		if (check)
+// 		{
+// 			TRACE_DBG("Checksum Error: Original: 0x%04x, calculated: 0x%04x\n",
+// 					  tcph->check, TCPCalcChecksum((uint16_t *)tcph, (tcph->doff << 2) + payloadlen, iph->saddr, iph->daddr));
+// 			tcph->check = 0;
+// 			return ERROR;
+// 		}
+// 	}
+// #endif
 
 #if defined(NETSTAT) && defined(ENABLELRO)
 	mtcp->nstat.rx_gdptbytes += payloadlen;

@@ -3,6 +3,7 @@
 
 #define ETH_ALEN 6
 #define MAX_DEVICES 6
+#define SBUFF_ELE_COUNT 128
 
 extern int num_cpus;
 extern int num_queues;

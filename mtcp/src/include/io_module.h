@@ -5,6 +5,10 @@
 #include <stdint.h>
 #ifndef DISABLE_DPDK
 #define HL_MAX_ETHPORTS 8
+#define ZERO_COPY_VERSION 1
+
+
+
 /* for dpdk/onvm big ints */
 #include <gmp.h>
 #endif
@@ -68,12 +72,14 @@ typedef struct io_module_func
 	int32_t (*link_devices)(struct mtcp_thread_context *ctx);
 	void (*release_pkt)(struct mtcp_thread_context *ctx, int ifidx, unsigned char *pkt_data, int len);
 	uint8_t *(*get_wptr)(struct mtcp_thread_context *ctx, int ifidx, uint16_t len);
+	int (*put_wptr)(struct mtcp_thread_context *ctxt, int ifidx, uint8_t *m);
 	int32_t (*send_pkts)(struct mtcp_thread_context *ctx, int nif, int flag);
 	uint8_t *(*get_rptr)(struct mtcp_thread_context *ctx, int ifidx, int index, uint16_t *len);
 	int32_t (*recv_pkts)(struct mtcp_thread_context *ctx, int ifidx);
 	int32_t (*select)(struct mtcp_thread_context *ctx);
 	void (*destroy_handle)(struct mtcp_thread_context *ctx);
 	int32_t (*dev_ioctl)(struct mtcp_thread_context *ctx, int nif, int cmd, void *argp);
+	int32_t (*dev_chk_offload)(struct mtcp_thread_context *ctx, void *mbuf, uint16_t l4len);
 } io_module_func __attribute__((aligned(__WORDSIZE)));
 /*----------------------------------------------------------------------------*/
 /* set I/O module context */
@@ -94,11 +100,6 @@ extern io_module_func *current_iomodule_func;
 #define PKT_RX_TCP_CSUM 0x06
 #define PKT_TX_TCPIP_CSUM_PEEK 0x07
 #define DRV_NAME 0x08
-
-/* registered psio context */
-#ifdef DISABLE_PSIO
-#define ps_list_devices(x) 0
-#endif
 
 /* registered dpdk context */
 extern io_module_func dpdk_module_func;

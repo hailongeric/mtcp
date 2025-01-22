@@ -49,7 +49,7 @@
 #endif /* !ENABLELRO */
 #define MBUF_SIZE (BUF_SIZE + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
 
-#define NB_MBUF 8192
+#define NB_MBUF 4096
 #define MEMPOOL_CACHE_SIZE 64
 #ifdef ENFORCE_RX_IDLE
 #define RX_IDLE_ENABLE 1
@@ -132,10 +132,10 @@ static struct rte_eth_conf port_conf = {
 		// 		.header_split = 0,	 /**< Header Split disabled */
 		// 		.hw_ip_checksum = 1, /**< IP checksum offload enabled */
 		// 		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
-				// .jumbo_frame = 0,	 /**< Jumbo Frame Support disabled */
+		// .jumbo_frame = 0,	 /**< Jumbo Frame Support disabled */
 		// 		.hw_strip_crc = 1,	 /**< CRC stripped by hardware */
 		// #endif						 /* !18.05 */
-		.offloads = RTE_ETH_RX_OFFLOAD_CHECKSUM,
+		.offloads = DEV_RX_OFFLOAD_CHECKSUM,
 #ifdef ENABLELRO
 		.enable_lro = 1, /**< Enable LRO */
 #endif
@@ -248,7 +248,8 @@ void dpdk_init_handle(struct mtcp_thread_context *ctxt)
 	/* set wmbufs correctly */
 	for (j = 0; j < num_devices_attached; j++)
 	{
-		/* Allocate wmbufs for each registered port */
+/* Allocate wmbufs for each registered port */
+#ifndef ZERO_COPY_VERSION
 		for (i = 0; i < TX_QUEUE_NUM; i++)
 		{
 			dpc->wmbufs[j].m_table[i] = rte_pktmbuf_alloc(pktmbuf_pool[ctxt->cpu]);
@@ -259,6 +260,7 @@ void dpdk_init_handle(struct mtcp_thread_context *ctxt)
 				exit(EXIT_FAILURE);
 			}
 		}
+#endif
 		/* set mbufs queue length to 0 to begin with */
 		dpc->wmbufs[j].len = 0;
 		dpc->wmbufs[j].head = 0;
@@ -370,6 +372,9 @@ int dpdk_send_pkts(struct mtcp_thread_context *ctxt, int ifidx, int flag)
 		head = dpc->wmbufs[ifidx].head;
 		for (i = head; i != tail; i = (i + 1) % TX_QUEUE_NUM)
 		{
+#ifdef ZERO_COPY_VERSION
+			dpc->wmbufs[ifidx].m_table[i] = NULL;
+#else
 			dpc->wmbufs[ifidx].m_table[i] = rte_pktmbuf_alloc(pktmbuf_pool[ctxt->cpu]);
 			if (unlikely(dpc->wmbufs[ifidx].m_table[i] == NULL))
 			{
@@ -377,6 +382,7 @@ int dpdk_send_pkts(struct mtcp_thread_context *ctxt, int ifidx, int flag)
 							ctxt->cpu, i, ifidx);
 				exit(EXIT_FAILURE);
 			}
+#endif
 		}
 		dpc->wmbufs[ifidx].head = tail;
 		dpc->wmbufs[ifidx].len = (dpc->wmbufs[ifidx].tail + TX_QUEUE_NUM - tail) % TX_QUEUE_NUM;
@@ -400,7 +406,7 @@ dpdk_get_wptr(struct mtcp_thread_context *ctxt, int ifidx, uint16_t pktsize)
 	// 	printf("unlikely(dpc->wmbufs[ifidx].len == MAX_PKT_BURST HL_MAX_ETHPORTS(%d) num_devices_attached(%d) sanity check failed\n", HL_MAX_ETHPORTS, num_devices_attached);
 	// 	return NULL;
 	// }
-	
+
 	int len = dpc->wmbufs[ifidx].len;
 	// printf("dpc->wmbufs[ifidx].tail (%d)) head(%d),len(%d), alpha(%d)\n", dpc->wmbufs[ifidx].tail, dpc->wmbufs[ifidx].head, dpc->wmbufs[ifidx].len, dpc->wmbufs[ifidx].unused);
 	if (unlikely((dpc->wmbufs[ifidx].tail + 1) % TX_QUEUE_NUM == dpc->wmbufs[ifidx].head))
@@ -412,6 +418,15 @@ dpdk_get_wptr(struct mtcp_thread_context *ctxt, int ifidx, uint16_t pktsize)
 
 	int idx = dpc->wmbufs[ifidx].tail;
 	dpc->wmbufs[ifidx].tail = (dpc->wmbufs[ifidx].tail + 1) % TX_QUEUE_NUM;
+#ifdef ZERO_COPY_VERSION
+	dpc->wmbufs[ifidx].m_table[idx] = rte_pktmbuf_alloc(pktmbuf_pool[ctxt->cpu]);
+	if (unlikely(dpc->wmbufs[ifidx].m_table[idx] == NULL))
+	{
+		TRACE_ERROR("Failed to allocate %d:wmbuf[%d] on device %d!\n",
+					ctxt->cpu, idx, ifidx);
+		exit(EXIT_FAILURE);
+	}
+#endif
 	m = dpc->wmbufs[ifidx].m_table[idx];
 
 	/* retrieve the right write offset */
@@ -427,6 +442,39 @@ dpdk_get_wptr(struct mtcp_thread_context *ctxt, int ifidx, uint16_t pktsize)
 
 	return (uint8_t *)ptr;
 }
+
+int dpdk_put_wptr(struct mtcp_thread_context *ctxt, int ifidx, uint8_t *m)
+{
+	struct dpdk_private_context *dpc;
+
+	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
+	/* sanity check */
+	// if (unlikely(dpc->wmbufs[ifidx].len == MAX_PKT_BURST))
+	// {
+	// 	printf("unlikely(dpc->wmbufs[ifidx].len == MAX_PKT_BURST HL_MAX_ETHPORTS(%d) num_devices_attached(%d) sanity check failed\n", HL_MAX_ETHPORTS, num_devices_attached);
+	// 	return NULL;
+	// }
+
+	int len = dpc->wmbufs[ifidx].len;
+	if (unlikely((dpc->wmbufs[ifidx].tail + 1) % TX_QUEUE_NUM == dpc->wmbufs[ifidx].head))
+	{
+		dpdk_send_pkts(ctxt, ifidx, FORCE_SEND);
+		// assert(0);
+		printf("put dpc->wmbufs[ifidx].tail (%d)) head(%d),len(%d), alpha(%d)\n", dpc->wmbufs[ifidx].tail, dpc->wmbufs[ifidx].head, dpc->wmbufs[ifidx].len, dpc->wmbufs[ifidx].unused);
+		return -1;
+	}
+
+	int idx = dpc->wmbufs[ifidx].tail;
+	dpc->wmbufs[ifidx].tail = (dpc->wmbufs[ifidx].tail + 1) % TX_QUEUE_NUM;
+
+	dpc->wmbufs[ifidx].m_table[idx] = (struct rte_mbuf *)m;
+	rte_pktmbuf_refcnt_update((struct rte_mbuf *)m, 1);
+	/* increment the len_of_mbuf var */
+	// dpc->wmbufs[ifidx].len = (dpc->wmbufs[ifidx].tail + TX_QUEUE_NUM - dpc->wmbufs[ifidx].head) % TX_QUEUE_NUM;
+	dpc->wmbufs[ifidx].len = (len + 1) % TX_QUEUE_NUM;
+	return 0;
+}
+
 /*----------------------------------------------------------------------------*/
 static inline void
 free_pkts(struct rte_mbuf **mtable, unsigned len)
@@ -809,8 +857,7 @@ void dpdk_load_module(void)
 			char name[RTE_MEMPOOL_NAMESIZE];
 			sprintf(name, "mbuf_pool-%d", rxlcore_id);
 			/* initialize the mbuf pools */
-			pktmbuf_pool[rxlcore_id] =
-				rte_mempool_lookup(name);
+			pktmbuf_pool[rxlcore_id] = rte_mempool_lookup(name);
 			if (pktmbuf_pool[rxlcore_id] == NULL)
 				rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
 		}
@@ -932,11 +979,13 @@ dpdk_dev_ioctl(struct mtcp_thread_context *ctx, int nif, int cmd, void *argp)
 			goto dev_ioctl_err;
 		break;
 	case PKT_TX_TCPIP_CSUM_PEEK:
-		if ((dev_info[nif].tx_offload_capa & DEV_TX_OFFLOAD_IPV4_CKSUM) == 0){
+		if ((dev_info[nif].tx_offload_capa & DEV_TX_OFFLOAD_IPV4_CKSUM) == 0)
+		{
 			printf("[+] ERROR:: don't support tx offload DEV_TX_OFFLOAD_IPV4_CKSUM\n");
 			goto dev_ioctl_err;
 		}
-		if ((dev_info[nif].tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM) == 0){
+		if ((dev_info[nif].tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM) == 0)
+		{
 			printf("[+] ERROR:: don't support tx offload DEV_TX_OFFLOAD_TCP_CKSUM\n");
 			goto dev_ioctl_err;
 		}
@@ -948,6 +997,23 @@ dpdk_dev_ioctl(struct mtcp_thread_context *ctx, int nif, int cmd, void *argp)
 dev_ioctl_err:
 	return -1;
 }
+
+// PKT_TX_TCPIP_CSUM
+int32_t
+dpdk_dev_chk_offload(struct mtcp_thread_context *ctx, void *mbuf, uint16_t l4len)
+{
+	struct rte_mbuf *m = (struct rte_mbuf *)mbuf;
+	struct iphdr *iph;
+	struct tcphdr *tcph;
+	iph = rte_pktmbuf_mtod_offset(m, struct iphdr *, sizeof(struct rte_ether_hdr));
+	tcph = (struct tcphdr *)((uint8_t *)iph + IP_HEADER_LEN);
+	m->l2_len = sizeof(struct rte_ether_hdr);
+	m->l3_len = IP_HEADER_LEN;
+	m->l4_len = l4len;
+	m->ol_flags = RTE_MBUF_F_TX_TCP_CKSUM | RTE_MBUF_F_TX_IP_CKSUM | RTE_MBUF_F_TX_IPV4;
+	tcph->check = rte_ipv4_phdr_cksum((struct rte_ipv4_hdr *)iph, m->ol_flags);
+	return 0;
+}
 /*----------------------------------------------------------------------------*/
 io_module_func dpdk_module_func = {
 	.load_module = dpdk_load_module,
@@ -956,11 +1022,13 @@ io_module_func dpdk_module_func = {
 	.release_pkt = dpdk_release_pkt,
 	.send_pkts = dpdk_send_pkts,
 	.get_wptr = dpdk_get_wptr,
+	.put_wptr = dpdk_put_wptr,
 	.recv_pkts = dpdk_recv_pkts,
 	.get_rptr = dpdk_get_rptr,
 	.select = dpdk_select,
 	.destroy_handle = dpdk_destroy_handle,
-	.dev_ioctl = dpdk_dev_ioctl};
+	.dev_ioctl = dpdk_dev_ioctl,
+	.dev_chk_offload = dpdk_dev_chk_offload};
 /*----------------------------------------------------------------------------*/
 #else
 io_module_func dpdk_module_func = {
@@ -970,6 +1038,7 @@ io_module_func dpdk_module_func = {
 	.release_pkt = NULL,
 	.send_pkts = NULL,
 	.get_wptr = NULL,
+	.put_wptr = NULL,
 	.recv_pkts = NULL,
 	.get_rptr = NULL,
 	.select = NULL,

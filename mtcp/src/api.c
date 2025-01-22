@@ -389,7 +389,6 @@ int mtcp_socket_ioctl(mctx_t mctx, int sockid, int request, void *argp)
 	{
 		tcp_stream *cur_stream;
 		struct tcp_ring_buffer *rbuf;
-
 		cur_stream = socket->stream;
 		if (!cur_stream)
 		{
@@ -1633,7 +1632,11 @@ CopyFromUser(mtcp_manager_t mtcp, tcp_stream *cur_stream, const char *buf, int l
 	/* allocate send buffer if not exist */
 	if (!sndvar->sndbuf)
 	{
+#ifdef ZERO_COPY_VERSION
+		sndvar->sndbuf = ZC_SBInit(mtcp->rbm_snd, SBUFF_ELE_COUNT, sndvar->iss + 1);
+#else
 		sndvar->sndbuf = SBInit(mtcp->rbm_snd, sndvar->iss + 1);
+#endif
 		if (!sndvar->sndbuf)
 		{
 			cur_stream->close_reason = TCP_NO_MEM;
@@ -1643,13 +1646,22 @@ CopyFromUser(mtcp_manager_t mtcp, tcp_stream *cur_stream, const char *buf, int l
 		}
 	}
 
+#ifdef ZERO_COPY_VERSION
+	// printf("w (%d)\\ (%d)\n", len, sndlen);
+	ret = ZC_SBPut(mtcp->rbm_snd, sndvar->sndbuf, buf, sndlen);
+#else
 	ret = SBPut(mtcp->rbm_snd, sndvar->sndbuf, buf, sndlen);
+#endif
 	// printf("w (%d) (%d)\n", len, ret);
 	assert(ret == sndlen);
+#ifdef ZERO_COPY_VERSION
+	sndvar->snd_wnd = (sndvar->sndbuf->size - sndvar->sndbuf->q_len-1) * ZC_PKT_SIZE;
+#else
 	sndvar->snd_wnd = sndvar->sndbuf->size - sndvar->sndbuf->len;
+#endif
 	if (ret <= 0)
 	{
-		TRACE_ERROR("SBPut failed. reason: %d (sndlen: %u, len: %u\n", ret, sndlen, sndvar->sndbuf->len);
+		TRACE_ERROR("SBPut failed. reason: %d (sndlen: %u, len: %u q_size %u\n", ret, sndlen, sndvar->sndbuf->len, sndvar->sndbuf->size);
 		errno = EAGAIN;
 		return -1;
 	}

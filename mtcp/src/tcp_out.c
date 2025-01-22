@@ -233,9 +233,15 @@ int SendTCPPacketStandalone(struct mtcp_manager *mtcp,
 
 // static char sendchar[200] = {0};
 
+static uint32_t temp = 0;
 
+#ifdef ZERO_COPY_VERSION
+int SendTCPPacket(struct mtcp_manager *mtcp, tcp_stream *cur_stream,
+				  uint32_t cur_ts, uint8_t flags, struct mtcp_zc_mbuf *zc_mbuf, uint16_t payloadlen)
+#else
 int SendTCPPacket(struct mtcp_manager *mtcp, tcp_stream *cur_stream,
 				  uint32_t cur_ts, uint8_t flags, uint8_t *payload, uint16_t payloadlen)
+#endif
 {
 	struct tcphdr *tcph;
 	uint16_t optlen;
@@ -250,7 +256,13 @@ int SendTCPPacket(struct mtcp_manager *mtcp, tcp_stream *cur_stream,
 		return ERROR;
 	}
 
-	tcph = (struct tcphdr *)IPOutput(mtcp, cur_stream,
+#ifdef ZERO_COPY_VERSION
+	if (zc_mbuf == NULL)
+	{
+		assert(payloadlen == 0);
+	}
+#endif
+	tcph = (struct tcphdr *)IPOutput(mtcp, cur_stream, zc_mbuf,
 									 TCP_HEADER_LEN + optlen + payloadlen);
 	if (tcph == NULL)
 	{
@@ -348,10 +360,13 @@ int SendTCPPacket(struct mtcp_manager *mtcp, tcp_stream *cur_stream,
 	// copy payload if exist
 	if (payloadlen > 0)
 	{
-		// memcpy((uint8_t *)tcph + TCP_HEADER_LEN + optlen, payload, payloadlen);
-		// SBget((uint8_t *)tcph + TCP_HEADER_LEN + optlen, cur_stream, payload, payloadlen);
-
+// memcpy((uint8_t *)tcph + TCP_HEADER_LEN + optlen, payload, payloadlen);
+// SBget((uint8_t *)tcph + TCP_HEADER_LEN + optlen, cur_stream, payload, payloadlen);
+#ifdef ZERO_COPY_VERSION
+		struct zc_tcp_send_buffer *sndbuf = cur_stream->sndvar->sndbuf;
+#else
 		struct tcp_send_buffer *sndbuf = cur_stream->sndvar->sndbuf;
+
 		if ((unsigned long)payload >= (unsigned long)sndbuf->data + sndbuf->size)
 		{
 			payload -= sndbuf->size;
@@ -366,6 +381,7 @@ int SendTCPPacket(struct mtcp_manager *mtcp, tcp_stream *cur_stream,
 			rte_memcpy((uint8_t *)tcph + TCP_HEADER_LEN + optlen, payload, len1);
 			rte_memcpy((uint8_t *)tcph + TCP_HEADER_LEN + optlen + len1, sndbuf->data, payloadlen - len1);
 		}
+#endif
 
 		// if (mtcp->ctx->cpu == 0)
 		// {
@@ -387,9 +403,15 @@ int SendTCPPacket(struct mtcp_manager *mtcp, tcp_stream *cur_stream,
 
 #if TCP_CALCULATE_CHECKSUM
 #ifndef DISABLE_HWCSUM
-	if (mtcp->iom->dev_ioctl != NULL)
+	if (zc_mbuf != NULL)
+	{
+		rc = mtcp->iom->dev_chk_offload(mtcp->ctx, zc_mbuf->bsd_mbuf, TCP_HEADER_LEN + optlen);
+	}
+	else
+	{
 		rc = mtcp->iom->dev_ioctl(mtcp->ctx, cur_stream->sndvar->nif_out,
 								  PKT_TX_TCPIP_CSUM, NULL);
+	}
 #endif
 	if (rc == -1)
 		tcph->check = TCPCalcChecksum((uint16_t *)tcph,
@@ -426,7 +448,12 @@ static int
 FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_ts)
 {
 	struct tcp_send_vars *sndvar = cur_stream->sndvar;
+
+#ifdef ZERO_COPY_VERSION
+	struct mtcp_zc_mbuf *data;
+#else
 	uint8_t *data;
+#endif
 	uint32_t pkt_len;
 	uint32_t len;
 	uint32_t seq = 0;
@@ -453,9 +480,20 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 	while (1)
 	{
 		seq = cur_stream->snd_nxt;
-		// seq = cur_stream->snd_nxt;
-		data = sndvar->sndbuf->head + (seq - sndvar->sndbuf->head_seq);
 		len = sndvar->sndbuf->len - (seq - sndvar->sndbuf->head_seq);
+// seq = cur_stream->snd_nxt;
+#ifdef ZERO_COPY_VERSION
+		if (len != 0)
+		{
+			data = ZC_SBGetIndexBylens(sndvar->sndbuf, seq);
+		}
+		else
+		{
+			data = NULL;
+		}
+#else
+		data = sndvar->sndbuf->head + (seq - sndvar->sndbuf->head_seq);
+#endif
 
 		/* sanity check */
 		if (TCP_SEQ_LT(seq, sndvar->sndbuf->head_seq))
@@ -499,7 +537,8 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 
 		remaining_window = MIN(sndvar->cwnd, sndvar->peer_wnd) - (seq - sndvar->snd_una);
 		/* if there is no space in the window */
-		if (remaining_window <= 0 ||
+		// ! hl modify remaining_window <= 0
+		if (remaining_window <= 1514 ||
 			(remaining_window < sndvar->mss && seq - sndvar->snd_una > 0))
 		{
 			/* if peer window is full, send ACK and let its peer advertises new one */
@@ -515,9 +554,9 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 			packets = -3;
 			goto out;
 		}
-
 		/* payload size limited by remaining window space */
 		len = MIN(len, remaining_window);
+
 		/* payload size limited by TCP MSS */
 		pkt_len = MIN(len, sndvar->mss - CalculateOptionLength(TCP_FLAG_ACK));
 
@@ -763,7 +802,8 @@ WriteTCPDataList(mtcp_manager_t mtcp,
 	while (cur_stream)
 	{
 		// printf("enter write TCP DATA cwnd(%d)\n", cur_stream->sndvar->cwnd);
-		if (++cnt > thresh){
+		if (++cnt > thresh)
+		{
 			printf("break write TCP DATA cwnd(%d)\n", cur_stream->sndvar->cwnd);
 			break;
 		}
