@@ -1,7 +1,11 @@
 #include <assert.h>
 
 #include "tcp_util.h"
+#ifdef ZERO_COPY_VERSION
+#include "zc_tcp_ring_buffer.h"
+#else
 #include "tcp_ring_buffer.h"
+#endif
 #include "eventpoll.h"
 #include "debug.h"
 #include "timer.h"

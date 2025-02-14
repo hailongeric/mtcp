@@ -65,8 +65,11 @@ struct tcp_recv_vars
 	uint8_t sacks : 3;
 #endif /* TCP_OPT_SACK_ENABLED */
 
+#ifdef ZERO_COPY_VERSION
+	struct zc_tcp_ring_buffer *rcvbuf;
+#else
 	struct tcp_ring_buffer *rcvbuf;
-
+#endif
 
 #if USE_SPIN_LOCK
 	pthread_spinlock_t read_lock;

@@ -5,7 +5,12 @@
 #include "tcp_util.h"
 #include "tcp_in.h"
 #include "tcp_out.h"
+#ifdef ZERO_COPY_VERSION
+#include "zc_tcp_send_buffer.h"
+#else
 #include "tcp_ring_buffer.h"
+#endif
+
 #include "eventpoll.h"
 #include "debug.h"
 #include "timer.h"
@@ -609,7 +614,7 @@ ProcessACK(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_ts,
 		sndvar->snd_una = ack_seq;
 		snd_wnd_prev = sndvar->snd_wnd;
 #ifdef ZERO_COPY_VERSION
-		sndvar->snd_wnd = (sndvar->sndbuf->size - sndvar->sndbuf->q_len-1) * ZC_PKT_SIZE;
+		sndvar->snd_wnd = (sndvar->sndbuf->size - sndvar->sndbuf->q_len - 1) * ZC_PKT_SIZE;
 #else
 		sndvar->snd_wnd = sndvar->sndbuf->size - sndvar->sndbuf->len;
 #endif
@@ -636,9 +641,15 @@ ProcessACK(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_ts,
 /* Return: TRUE (1) in normal case, FALSE (0) if immediate ACK is required    */
 /* CAUTION: should only be called at ESTABLISHED, FIN_WAIT_1, FIN_WAIT_2      */
 /*----------------------------------------------------------------------------*/
+#ifdef ZERO_COPY_VERSION
+static inline int
+ProcessTCPPayload(mtcp_manager_t mtcp, tcp_stream *cur_stream,
+				  uint32_t cur_ts, struct mtcp_zc_rmbuf *payload, uint32_t seq, int payloadlen)
+#else
 static inline int
 ProcessTCPPayload(mtcp_manager_t mtcp, tcp_stream *cur_stream,
 				  uint32_t cur_ts, uint8_t *payload, uint32_t seq, int payloadlen)
+#endif
 {
 	struct tcp_recv_vars *rcvvar = cur_stream->rcvvar;
 	uint32_t prev_rcv_nxt;
@@ -658,7 +669,11 @@ ProcessTCPPayload(mtcp_manager_t mtcp, tcp_stream *cur_stream,
 	/* allocate receive buffer if not exist */
 	if (!rcvvar->rcvbuf)
 	{
+#ifdef ZERO_COPY_VERSION
+		rcvvar->rcvbuf = ZC_RBInit(mtcp->rbm_rcv, rcvvar->irs + 1);
+#else
 		rcvvar->rcvbuf = RBInit(mtcp->rbm_rcv, rcvvar->irs + 1);
+#endif
 		if (!rcvvar->rcvbuf)
 		{
 			TRACE_ERROR("Stream %d: Failed to allocate receive buffer.\n",
@@ -679,6 +694,25 @@ ProcessTCPPayload(mtcp_manager_t mtcp, tcp_stream *cur_stream,
 	}
 #endif
 	prev_rcv_nxt = cur_stream->rcv_nxt;
+
+#ifdef ZERO_COPY_VERSION
+	ret = ZC_RBPut(mtcp->rbm_rcv,
+				   rcvvar->rcvbuf, payload, (uint32_t)payloadlen, seq);
+	if (ret < 0)
+	{
+		TRACE_ERROR("Cannot merge payload. reason: %d\n", ret);
+	}
+	if (cur_stream->state == TCP_ST_FIN_WAIT_1 ||
+		cur_stream->state == TCP_ST_FIN_WAIT_2)
+	{
+		ZC_FreeAllBuffer(rcvvar->rcvbuf);
+		ZC_RBRemove(mtcp->rbm_rcv,
+					rcvvar->rcvbuf, rcvvar->rcvbuf->merged_len, AT_MTCP);
+	}
+	cur_stream->rcv_nxt = rcvvar->rcvbuf->head_seq + rcvvar->rcvbuf->merged_len;
+	rcvvar->rcv_wnd = WINDOWS_SIZE - rcvvar->rcvbuf->merged_len;
+
+#else
 	ret = RBPut(mtcp->rbm_rcv,
 				rcvvar->rcvbuf, payload, (uint32_t)payloadlen, seq);
 	if (ret < 0)
@@ -696,6 +730,7 @@ ProcessTCPPayload(mtcp_manager_t mtcp, tcp_stream *cur_stream,
 	}
 	cur_stream->rcv_nxt = rcvvar->rcvbuf->head_seq + rcvvar->rcvbuf->merged_len;
 	rcvvar->rcv_wnd = rcvvar->rcvbuf->size - rcvvar->rcvbuf->merged_len;
+#endif
 
 #ifndef EABLE_COROUTINE
 	SBUF_UNLOCK(&rcvvar->read_lock);
@@ -984,10 +1019,17 @@ Handle_TCP_ST_SYN_RCVD(mtcp_manager_t mtcp, uint32_t cur_ts,
 	}
 }
 /*----------------------------------------------------------------------------*/
+#ifdef ZERO_COPY_VERSION
+static inline void
+Handle_TCP_ST_ESTABLISHED(mtcp_manager_t mtcp, uint32_t cur_ts,
+						  tcp_stream *cur_stream, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq,
+						  struct mtcp_zc_rmbuf *payload, int payloadlen, uint16_t window)
+#else
 static inline void
 Handle_TCP_ST_ESTABLISHED(mtcp_manager_t mtcp, uint32_t cur_ts,
 						  tcp_stream *cur_stream, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq,
 						  uint8_t *payload, int payloadlen, uint16_t window)
+#endif
 {
 	if (tcph->syn)
 	{
@@ -1134,10 +1176,17 @@ Handle_TCP_ST_LAST_ACK(mtcp_manager_t mtcp, uint32_t cur_ts, const struct iphdr 
 	}
 }
 /*----------------------------------------------------------------------------*/
+#ifdef ZERO_COPY_VERSION
+static inline void
+Handle_TCP_ST_FIN_WAIT_1(mtcp_manager_t mtcp, uint32_t cur_ts,
+						 tcp_stream *cur_stream, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq,
+						 struct mtcp_zc_rmbuf *payload, int payloadlen, uint16_t window)
+#else
 static inline void
 Handle_TCP_ST_FIN_WAIT_1(mtcp_manager_t mtcp, uint32_t cur_ts,
 						 tcp_stream *cur_stream, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq,
 						 uint8_t *payload, int payloadlen, uint16_t window)
+#endif
 {
 
 	if (TCP_SEQ_LT(seq, cur_stream->rcv_nxt))
@@ -1221,10 +1270,17 @@ Handle_TCP_ST_FIN_WAIT_1(mtcp_manager_t mtcp, uint32_t cur_ts,
 	}
 }
 /*----------------------------------------------------------------------------*/
+#ifdef ZERO_COPY_VERSION
+static inline void
+Handle_TCP_ST_FIN_WAIT_2(mtcp_manager_t mtcp, uint32_t cur_ts,
+						 tcp_stream *cur_stream, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq,
+						 struct mtcp_zc_rmbuf *payload, int payloadlen, uint16_t window)
+#else
 static inline void
 Handle_TCP_ST_FIN_WAIT_2(mtcp_manager_t mtcp, uint32_t cur_ts,
 						 tcp_stream *cur_stream, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq,
 						 uint8_t *payload, int payloadlen, uint16_t window)
+#endif
 {
 	if (tcph->ack)
 	{
@@ -1336,45 +1392,70 @@ Handle_TCP_ST_CLOSING(mtcp_manager_t mtcp, uint32_t cur_ts,
 	}
 }
 /*----------------------------------------------------------------------------*/
+
+#ifdef ZERO_COPY_VERSION
 int ProcessTCPPacket(mtcp_manager_t mtcp,
-					 uint32_t cur_ts, const int ifidx, const struct iphdr *iph, int ip_len)
+					 uint32_t cur_ts, const int ifidx, struct mtcp_zc_rmbuf *pkt_data, int ip_len)
+#else
+int ProcessTCPPacket(struct mtcp_manager *mtcp, uint32_t cur_ts, const int ifidx,
+					 const struct iphdr *iph, int ip_len)
+#endif
+
 {
+
+#ifdef ZERO_COPY_VERSION
+	struct iphdr *iph = (struct iphdr *)pkt_data->bsd_mbuf;
+#endif
+
 	struct tcphdr *tcph = (struct tcphdr *)((u_char *)iph + (iph->ihl << 2));
+
+#ifdef ZERO_COPY_VERSION
+	uint8_t *temp = (uint8_t *)tcph + (tcph->doff << 2);
+	int payloadlen = ip_len - (temp - (u_char *)iph);
+	pkt_data->bsd_mbuf = temp;
+	pkt_data->len = payloadlen;
+	struct mtcp_zc_rmbuf *payload = pkt_data;
+#else
 	uint8_t *payload = (uint8_t *)tcph + (tcph->doff << 2);
 	int payloadlen = ip_len - (payload - (u_char *)iph);
+#endif
+
 	tcp_stream s_stream;
 	tcp_stream *cur_stream = NULL;
 	uint32_t seq = ntohl(tcph->seq);
 	uint32_t ack_seq = ntohl(tcph->ack_seq);
 	uint16_t window = ntohs(tcph->window);
 	uint16_t check;
+
 	int ret;
 	int rc = -1;
 
 	/* Check ip packet invalidation */
 	if (ip_len < ((iph->ihl + tcph->doff) << 2))
+	{
 		return ERROR;
+	}
 
-// ! hl modidfy 
-// #if VERIFY_RX_CHECKSUM
-// #ifndef DISABLE_HWCSUM
-// 	if (mtcp->iom->dev_ioctl != NULL)
-// 		rc = mtcp->iom->dev_ioctl(mtcp->ctx, ifidx,
-// 								  PKT_RX_TCP_CSUM, NULL);
-// #endif
-// 	if (rc == -1)
-// 	{
-// 		check = TCPCalcChecksum((uint16_t *)tcph,
-// 								(tcph->doff << 2) + payloadlen, iph->saddr, iph->daddr);
-// 		if (check)
-// 		{
-// 			TRACE_DBG("Checksum Error: Original: 0x%04x, calculated: 0x%04x\n",
-// 					  tcph->check, TCPCalcChecksum((uint16_t *)tcph, (tcph->doff << 2) + payloadlen, iph->saddr, iph->daddr));
-// 			tcph->check = 0;
-// 			return ERROR;
-// 		}
-// 	}
-// #endif
+	// ! hl modidfy
+	// #if VERIFY_RX_CHECKSUM
+	// #ifndef DISABLE_HWCSUM
+	// 	if (mtcp->iom->dev_ioctl != NULL)
+	// 		rc = mtcp->iom->dev_ioctl(mtcp->ctx, ifidx,
+	// 								  PKT_RX_TCP_CSUM, NULL);
+	// #endif
+	// 	if (rc == -1)
+	// 	{
+	// 		check = TCPCalcChecksum((uint16_t *)tcph,
+	// 								(tcph->doff << 2) + payloadlen, iph->saddr, iph->daddr);
+	// 		if (check)
+	// 		{
+	// 			TRACE_DBG("Checksum Error: Original: 0x%04x, calculated: 0x%04x\n",
+	// 					  tcph->check, TCPCalcChecksum((uint16_t *)tcph, (tcph->doff << 2) + payloadlen, iph->saddr, iph->daddr));
+	// 			tcph->check = 0;
+	// 			return ERROR;
+	// 		}
+	// 	}
+	// #endif
 
 #if defined(NETSTAT) && defined(ENABLELRO)
 	mtcp->nstat.rx_gdptbytes += payloadlen;
@@ -1391,7 +1472,9 @@ int ProcessTCPPacket(mtcp_manager_t mtcp,
 		cur_stream = CreateNewFlowHTEntry(mtcp, cur_ts, iph, ip_len, tcph,
 										  seq, ack_seq, payloadlen, window);
 		if (!cur_stream)
+		{
 			return TRUE;
+		}
 	}
 
 	/* Validate sequence. if not valid, ignore the packet */

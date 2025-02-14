@@ -388,7 +388,11 @@ int mtcp_socket_ioctl(mctx_t mctx, int sockid, int request, void *argp)
 	if (request == FIONREAD)
 	{
 		tcp_stream *cur_stream;
+#ifdef ZERO_COPY_VERSION
+		struct zc_tcp_ring_buffer *rbuf;
+#else
 		struct tcp_ring_buffer *rbuf;
+#endif
 		cur_stream = socket->stream;
 		if (!cur_stream)
 		{
@@ -1252,8 +1256,38 @@ PeekForUser(mtcp_manager_t mtcp, tcp_stream *cur_stream, char *buf, int len)
 		return -1;
 	}
 
-	/* Only copy data to user buffer */
+/* Only copy data to user buffer */
+#ifdef ZERO_COPY_VERSION
+	/* Copy data to user buffer and remove it from receiving buffer */
+
+	uint16_t r_head = rcvvar->rcvbuf->r_head;
+	uint16_t r_tail = rcvvar->rcvbuf->r_tail;
+
+	int copyed_len = 0;
+	int temp_len;
+	while (r_head != r_tail)
+	{
+		temp_len = rcvvar->rcvbuf->data[r_head]->len;
+		if (temp_len <= copylen - copyed_len)
+		{
+			memcpy(buf + copyed_len, rcvvar->rcvbuf->data[r_head]->bsd_mbuf + rcvvar->rcvbuf->data[r_head]->off, temp_len);
+			rcvvar->rcvbuf->data[r_head]->free = 1;
+			copyed_len += temp_len;
+			r_head = (r_head + 1) % rcvvar->rcvbuf->q_len;
+		}
+		else
+		{
+			memcpy(buf + copyed_len, rcvvar->rcvbuf->data[r_head]->bsd_mbuf + rcvvar->rcvbuf->data[r_head]->off, copylen - copyed_len);
+			rcvvar->rcvbuf->data[r_head]->off = copylen - copyed_len;
+			rcvvar->rcvbuf->data[r_head]->len = temp_len - (copylen - copyed_len);
+			copyed_len += copylen - copyed_len;
+			break;
+		}
+	}
+
+#else
 	memcpy(buf, rcvvar->rcvbuf->head, copylen);
+#endif
 
 	return copylen;
 }
@@ -1279,10 +1313,41 @@ CopyToUser(mtcp_manager_t mtcp, tcp_stream *cur_stream, char *buf, int len)
 	}
 
 	prev_rcv_wnd = rcvvar->rcv_wnd;
+#ifdef ZERO_COPY_VERSION
 	/* Copy data to user buffer and remove it from receiving buffer */
+
+	uint16_t r_head = rcvvar->rcvbuf->r_head;
+	uint16_t r_tail = rcvvar->rcvbuf->r_tail;
+
+	int copyed_len = 0;
+	int temp_len;
+	while (r_head != r_tail)
+	{
+		temp_len = rcvvar->rcvbuf->data[r_head]->len;
+		if (temp_len <= copylen - copyed_len)
+		{
+			memcpy(buf + copyed_len, rcvvar->rcvbuf->data[r_head]->bsd_mbuf + rcvvar->rcvbuf->data[r_head]->off, temp_len);
+			rcvvar->rcvbuf->data[r_head]->free = 1;
+			copyed_len += temp_len;
+			r_head = (r_head + 1) % rcvvar->rcvbuf->q_len;
+		}
+		else
+		{
+			memcpy(buf + copyed_len, rcvvar->rcvbuf->data[r_head]->bsd_mbuf + rcvvar->rcvbuf->data[r_head]->off, copylen - copyed_len);
+			rcvvar->rcvbuf->data[r_head]->off = copylen - copyed_len;
+			rcvvar->rcvbuf->data[r_head]->len = temp_len - (copylen - copyed_len);
+			copyed_len += copylen - copyed_len;
+			break;
+		}
+	}
+	rcvvar->rcvbuf->r_head = r_head;
+	ZC_RBRemove(mtcp->rbm_rcv, rcvvar->rcvbuf, copylen, AT_APP);
+	rcvvar->rcv_wnd = WINDOWS_SIZE - rcvvar->rcvbuf->merged_len;
+#else
 	memcpy(buf, rcvvar->rcvbuf->head, copylen);
 	RBRemove(mtcp->rbm_rcv, rcvvar->rcvbuf, copylen, AT_APP);
 	rcvvar->rcv_wnd = rcvvar->rcvbuf->size - rcvvar->rcvbuf->merged_len;
+#endif
 
 	/* Advertise newly freed receive buffer */
 	if (cur_stream->need_wnd_adv)
@@ -1302,6 +1367,7 @@ CopyToUser(mtcp_manager_t mtcp, tcp_stream *cur_stream, char *buf, int len)
 	}
 
 	UNUSED(prev_rcv_wnd);
+	// printf("recv len %d\n", copylen);
 	return copylen;
 }
 /*----------------------------------------------------------------------------*/
@@ -1655,7 +1721,7 @@ CopyFromUser(mtcp_manager_t mtcp, tcp_stream *cur_stream, const char *buf, int l
 	// printf("w (%d) (%d)\n", len, ret);
 	assert(ret == sndlen);
 #ifdef ZERO_COPY_VERSION
-	sndvar->snd_wnd = (sndvar->sndbuf->size - sndvar->sndbuf->q_len-1) * ZC_PKT_SIZE;
+	sndvar->snd_wnd = (sndvar->sndbuf->size - sndvar->sndbuf->q_len - 1) * ZC_PKT_SIZE;
 #else
 	sndvar->snd_wnd = sndvar->sndbuf->size - sndvar->sndbuf->len;
 #endif

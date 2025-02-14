@@ -70,7 +70,7 @@ typedef struct io_module_func
 	void (*load_module)(void);
 	void (*init_handle)(struct mtcp_thread_context *ctx);
 	int32_t (*link_devices)(struct mtcp_thread_context *ctx);
-	void (*release_pkt)(struct mtcp_thread_context *ctx, int ifidx, unsigned char *pkt_data, int len);
+	void (*release_pkt)(struct mtcp_thread_context *ctx, int ifidx);
 	uint8_t *(*get_wptr)(struct mtcp_thread_context *ctx, int ifidx, uint16_t len);
 	int (*put_wptr)(struct mtcp_thread_context *ctxt, int ifidx, uint8_t *m);
 	int32_t (*send_pkts)(struct mtcp_thread_context *ctx, int nif, int flag);

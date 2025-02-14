@@ -15,11 +15,12 @@
 #ifdef ZERO_COPY_VERSION
 #include "zc_memory_mgt.h"
 #include "zc_tcp_send_buffer.h"
+#include "zc_tcp_ring_buffer.h"
 #else
 #include "tcp_send_buffer.h"
+#include "tcp_ring_buffer.h"
 #endif
 #include "memory_mgt.h"
-#include "tcp_ring_buffer.h"
 #include "tcp_stream_queue.h"
 #include "socket.h"
 #include "mtcp_api.h"

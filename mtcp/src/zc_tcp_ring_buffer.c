@@ -4,7 +4,7 @@
 #include <assert.h>
 #include <sys/types.h>
 
-#include "tcp_ring_buffer.h"
+#include "zc_tcp_ring_buffer.h"
 #include "tcp_rb_frag_queue.h"
 #include "zc_memory_mgt.h"
 #include "memory_mgt.h"
@@ -45,31 +45,31 @@ RBGetCurnum(rb_manager_t rbm)
 	return rbm->cur_num;
 }
 /*-----------------------------------------------------------------------------*/
-void RBPrintInfo(struct tcp_ring_buffer *buff)
+void ZC_RBPrintInfo(struct zc_tcp_ring_buffer *buff)
 {
-	printf("buff_data %p, buff_size %d, buff_mlen %d, "
-		   "buff_clen %lu, buff_head %p (%d), buff_tail (%d)\n",
-		   buff->data, buff->size, buff->merged_len, buff->cum_len,
-		   buff->head, buff->head_offset, buff->tail_offset);
+	printf("buff_data %p, buff_q_len %d, buff_mlen %d, "
+		   "buff_clen %lu, buff_r_head %d (%d)\n",
+		   buff->data, buff->q_len, buff->merged_len, buff->cum_len,
+		   buff->r_head, buff->head_offset);
 }
 /*----------------------------------------------------------------------------*/
-void RBPrintStr(struct tcp_ring_buffer *buff)
+void ZC_RBPrintStr(struct zc_tcp_ring_buffer *buff)
 {
-	RBPrintInfo(buff);
-	printf("%s\n", buff->head);
+	ZC_RBPrintInfo(buff);
+	// printf("%s\n", buff->head);
 }
 /*----------------------------------------------------------------------------*/
-void RBPrintHex(struct tcp_ring_buffer *buff)
+void ZC_RBPrintHex(struct zc_tcp_ring_buffer *buff)
 {
 	int i;
 
-	RBPrintInfo(buff);
+	ZC_RBPrintInfo(buff);
 
 	for (i = 0; i < buff->merged_len; i++)
 	{
 		if (i != 0 && i % 16 == 0)
 			printf("\n");
-		printf("%0x ", *((unsigned char *)buff->head + i));
+		// printf("%0x ", *((unsigned char *)buff->head + i));
 	}
 	printf("\n");
 }
@@ -89,14 +89,16 @@ RBManagerCreate(mtcp_manager_t mtcp, size_t chunk_size, uint32_t cnum)
 	rbm->cnum = cnum;
 
 	char pool_name[RTE_MEMPOOL_NAMESIZE];
-	sprintf(pool_name, "rbm_pool_%u", mtcp->ctx->cpu);
-	rbm->mp = (mem_pool_t)MPCreate(pool_name, chunk_size, (uint64_t)chunk_size * cnum);
-	if (!rbm->mp)
-	{
-		TRACE_ERROR("Failed to allocate mp pool.\n");
-		free(rbm);
-		return NULL;
-	}
+
+	// sprintf(pool_name, "rbm_pool_%u", mtcp->ctx->cpu);
+	// rbm->mp = (mem_pool_t)MPCreate(pool_name, chunk_size, (uint64_t)chunk_size * cnum);
+	// if (!rbm->mp)
+	// {
+	// 	TRACE_ERROR("Failed to allocate mp pool.\n");
+	// 	free(rbm);
+	// 	return NULL;
+	// }
+
 	sprintf(pool_name, "frag_mp_%u", mtcp->ctx->cpu);
 	rbm->frag_mp = (mem_pool_t)MPCreate(pool_name, sizeof(struct fragment_ctx),
 										sizeof(struct fragment_ctx) * cnum);
@@ -104,7 +106,7 @@ RBManagerCreate(mtcp_manager_t mtcp, size_t chunk_size, uint32_t cnum)
 	if (!rbm->frag_mp)
 	{
 		TRACE_ERROR("Failed to allocate frag_mp pool.\n");
-		MPDestroy(rbm->mp);
+		// MPDestroy(rbm->mp);
 		free(rbm);
 		return NULL;
 	}
@@ -113,7 +115,7 @@ RBManagerCreate(mtcp_manager_t mtcp, size_t chunk_size, uint32_t cnum)
 	if (!rbm->free_fragq)
 	{
 		TRACE_ERROR("Failed to create free fragment queue.\n");
-		MPDestroy(rbm->mp);
+		// MPDestroy(rbm->mp);
 		MPDestroy(rbm->frag_mp);
 		free(rbm);
 		return NULL;
@@ -122,7 +124,7 @@ RBManagerCreate(mtcp_manager_t mtcp, size_t chunk_size, uint32_t cnum)
 	if (!rbm->free_fragq_int)
 	{
 		TRACE_ERROR("Failed to create internal free fragment queue.\n");
-		MPDestroy(rbm->mp);
+		// MPDestroy(rbm->mp);
 		MPDestroy(rbm->frag_mp);
 		DestroyRBFragQueue(rbm->free_fragq);
 		free(rbm);
@@ -192,11 +194,11 @@ AllocateFragmentContext(rb_manager_t rbm)
 	return frag;
 }
 /*----------------------------------------------------------------------------*/
-struct tcp_ring_buffer *
-RBInit(rb_manager_t rbm, uint32_t init_seq)
+struct zc_tcp_ring_buffer *
+ZC_RBInit(rb_manager_t rbm, uint32_t init_seq)
 {
-	struct tcp_ring_buffer *buff =
-		(struct tcp_ring_buffer *)calloc(1, sizeof(struct tcp_ring_buffer));
+	struct zc_tcp_ring_buffer *buff =
+		(struct zc_tcp_ring_buffer *)calloc(1, sizeof(struct zc_tcp_ring_buffer));
 
 	if (buff == NULL)
 	{
@@ -204,27 +206,33 @@ RBInit(rb_manager_t rbm, uint32_t init_seq)
 		return NULL;
 	}
 
-	buff->data = MPAllocateChunk(rbm->mp);
-	if (!buff->data)
-	{
-		perror("rb_init MPAllocateChunk");
-		free(buff);
-		return NULL;
-	}
+	buff->unsort_data = NULL;
+	buff->u_qlen = 0;
 
 	// memset(buff->data, 0, rbm->chunk_size);
+	for (int i = 0; i < ZC_UNSORTED_PKT_COUNT - 1; i++)
+	{
+		buff->list_pool[i].next = &buff->list_pool[i + 1];
+	}
+	buff->list_pool[ZC_UNSORTED_PKT_COUNT - 1].next = NULL;
+	buff->free_list = &buff->list_pool[0];
+	buff->free_list_len = ZC_UNSORTED_PKT_COUNT;
 
-	buff->size = rbm->chunk_size;
-	buff->head = buff->data;
+	// buff->size = rbm->chunk_size;
+	buff->q_len = ZC_PKT_COUNT;
+	// buff->head = buff->data;
 	buff->head_seq = init_seq;
 	buff->init_seq = init_seq;
+	buff->need_seq = init_seq;
+	buff->r_head = 0;
+	buff->r_tail = 0;
 
 	rbm->cur_num++;
 
 	return buff;
 }
 /*----------------------------------------------------------------------------*/
-void RBFree(rb_manager_t rbm, struct tcp_ring_buffer *buff)
+void ZC_RBFree(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff)
 {
 	assert(buff);
 	if (buff->fctx)
@@ -233,10 +241,10 @@ void RBFree(rb_manager_t rbm, struct tcp_ring_buffer *buff)
 		buff->fctx = NULL;
 	}
 
-	if (buff->data)
-	{
-		MPFreeChunk(rbm->mp, buff->data);
-	}
+	// if (buff->data)
+	// {
+	// 	free(buff->data);
+	// }
 
 	rbm->cur_num--;
 
@@ -291,8 +299,8 @@ MergeFragments(struct fragment_ctx *a, struct fragment_ctx *b)
 	b->len = max_seq - min_seq;
 }
 /*----------------------------------------------------------------------------*/
-int RBPut(rb_manager_t rbm, struct tcp_ring_buffer *buff,
-		  void *data, uint32_t len, uint32_t cur_seq)
+int ZC_RBPut(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff,
+			 struct mtcp_zc_rmbuf *data, uint32_t len, uint32_t cur_seq)
 {
 	int putx, end_off;
 	struct fragment_ctx *new_ctx;
@@ -307,31 +315,142 @@ int RBPut(rb_manager_t rbm, struct tcp_ring_buffer *buff,
 	if (GetMinSeq(buff->head_seq, cur_seq) != buff->head_seq)
 		return 0;
 
-	putx = cur_seq - buff->head_seq;
+	putx = cur_seq - buff->need_seq;
 	end_off = putx + len;
-	if (buff->size < end_off)
+	if (WINDOWS_SIZE < end_off)
 	{
 		return -2;
 	}
 
 	// if buffer is at tail, move the data to the first of head
-	if (buff->size <= (buff->head_offset + end_off))
+	assert(putx >= 0);
+	uint16_t idx = buff->r_tail;
+	struct rmbuf_list *q, *prev0;
+	if (putx == 0)
 	{
-		memmove(buff->data, buff->head, buff->last_len);
-		buff->tail_offset -= buff->head_offset;
-		buff->head_offset = 0;
-		buff->head = buff->data;
+		buff->data[idx] = data;
+		data->seq = cur_seq;
+		data->free = 0;
+		data->len = len;
+		buff->need_seq = cur_seq + len;
+		idx = (idx + 1) % buff->q_len;
+		buff->r_tail = idx;
+		if (buff->r_tail == buff->r_head)
+		{
+			printf("rc data Ring buffer is full\n");
+			assert(0);
+		}
 	}
-#ifdef ENABLELRO
-	// copy data to buffer
-	__MEMCPY_DATA_2_BUFFER;
-#else
-	// copy data to buffer
-	memcpy(buff->head + putx, data, len);
-#endif
-	if (buff->tail_offset < buff->head_offset + end_off)
-		buff->tail_offset = buff->head_offset + end_off;
-	buff->last_len = buff->tail_offset - buff->head_offset;
+	else if (putx > 0)
+	{
+		// printf("s2 buff->u_qlen(%d)\n",buff->u_qlen);
+		printf("insq(%u) head_seq %u, cur_seq %u, need_seq %u buff->u_qlen(%d)\n", buff->init_seq, buff->head_seq, cur_seq, buff->need_seq, buff->u_qlen);
+		int i = buff->r_tail;
+		i = (i - 1) % buff->q_len;
+
+		printf("idx[%d] seq(%u) len(%u) buff->merged_len(%d)\n", i, buff->data[i]->seq, buff->data[i]->len,buff->merged_len);
+
+		assert(buff->u_qlen < ZC_UNSORTED_PKT_COUNT);
+		struct rmbuf_list *node = buff->free_list;
+		assert(node != NULL);
+		assert(buff->u_qlen < ZC_UNSORTED_PKT_COUNT);
+		buff->free_list = node->next;
+
+		node->data = data;
+		data->seq = cur_seq;
+		data->len = len;
+		data->free = 0;
+		buff->u_qlen++;
+
+		q = buff->unsort_data;
+		prev0 = NULL;
+		while (q)
+		{
+			if (q->data->seq > cur_seq && q->data->seq - cur_seq < 512 * 2048)
+			{
+				break;
+			}
+			prev0 = q;
+			q = q->next;
+		}
+		if (prev0 == NULL)
+		{
+			node->next = buff->unsort_data;
+			buff->unsort_data = node;
+		}
+		else
+		{
+			node->next = prev0->next;
+			prev0->next = node;
+		}
+	}
+	q = buff->unsort_data;
+	// increasing sequence
+	// buff->need_seq- q->data->seq < 512 * 2048 in order to sequence number is overflow
+	while (q != NULL && q->data->seq <= buff->need_seq && buff->need_seq - q->data->seq < 512 * 2048)
+	{
+		if (q->data->seq < buff->need_seq)
+		{
+			if (q->data->seq + q->data->len <= buff->need_seq)
+			{
+				// free q node
+
+				buff->unsort_data = q->next;
+
+				q->data->free = 1;
+				struct rmbuf_list *node = q;
+				q = q->next;
+				node->next = buff->free_list;
+				buff->free_list = node;
+				buff->u_qlen--;
+			}
+			else
+			{
+				buff->data[idx] = q->data;
+				q->data->off = buff->need_seq - q->data->seq;
+				q->data->len = q->data->len - q->data->off;
+				q->data->seq = q->data->seq + q->data->off;
+				buff->need_seq = q->data->seq + q->data->len;
+				idx = (idx + 1) % buff->q_len;
+				buff->r_tail = idx;
+				if (buff->r_tail == buff->r_head)
+				{
+					printf("rc data Ring buffer is full\n");
+					assert(0);
+				}
+
+				buff->unsort_data = q->next;
+				q->next = buff->free_list;
+				buff->free_list = q;
+				buff->u_qlen--;
+			}
+		}
+		else if (q->data->seq == buff->need_seq)
+		{
+			buff->data[idx] = q->data;
+			buff->need_seq = q->data->seq + q->data->len;
+			idx = (idx + 1) % buff->q_len;
+			buff->r_tail = idx;
+			if (buff->r_tail == buff->r_head)
+			{
+				printf("rc data Ring buffer is full\n");
+				assert(0);
+			}
+
+			buff->unsort_data = q->next;
+			q->next = buff->free_list;
+			buff->free_list = q;
+			buff->u_qlen--;
+		}
+	}
+
+	// #ifdef ENABLELRO
+	// 	// copy data to buffer
+	// 	__MEMCPY_DATA_2_BUFFER;
+	// #else
+	// 	// copy data to buffer
+	// 	memcpy(buff->head + putx, data, len);
+	// #endif
 
 	// create fragmentation context blocks
 	new_ctx = AllocateFragmentContext(rbm);
@@ -409,7 +528,7 @@ int RBPut(rb_manager_t rbm, struct tcp_ring_buffer *buff,
 }
 /*----------------------------------------------------------------------------*/
 size_t
-RBRemove(rb_manager_t rbm, struct tcp_ring_buffer *buff, size_t len, int option)
+ZC_RBRemove(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff, size_t len, int option)
 {
 	/* this function should be called only in application thread */
 
@@ -420,11 +539,11 @@ RBRemove(rb_manager_t rbm, struct tcp_ring_buffer *buff, size_t len, int option)
 		return 0;
 
 	buff->head_offset += len;
-	buff->head = buff->data + buff->head_offset;
+	// buff->head = buff->data + buff->head_offset;
 	buff->head_seq += len;
 
 	buff->merged_len -= len;
-	buff->last_len -= len;
+	// buff->last_len -= len;
 
 	// modify fragementation chunks
 	if (len == buff->fctx->len)
@@ -451,5 +570,30 @@ RBRemove(rb_manager_t rbm, struct tcp_ring_buffer *buff, size_t len, int option)
 	}
 
 	return len;
+}
+
+void ZC_FreeAllBuffer(struct zc_tcp_ring_buffer *buff)
+{
+	uint16_t r_head = buff->r_head;
+	uint16_t r_tail = buff->r_tail;
+	while (r_head != r_tail)
+	{
+		buff->data[r_head]->free = 1;
+		r_head = (r_head + 1) % buff->q_len;
+	}
+	struct rmbuf_list *q = buff->unsort_data;
+	while (q != NULL)
+	{
+		q->data->free = 1;
+		q = q->next;
+	}
+	buff->unsort_data = NULL;
+	buff->u_qlen = 0;
+	for (int i = 0; i < ZC_UNSORTED_PKT_COUNT; i++)
+	{
+		buff->list_pool[i].next = &buff->list_pool[i + 1];
+	}
+	buff->list_pool[ZC_UNSORTED_PKT_COUNT - 1].next = NULL;
+	buff->free_list = &buff->list_pool[0];
 }
 /*----------------------------------------------------------------------------*/

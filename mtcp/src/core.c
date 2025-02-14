@@ -13,7 +13,8 @@
 #include "cpu.h"
 #include "eth_in.h"
 #include "fhash.h"
-#include "tcp_ring_buffer.h"
+
+#include "zc_tcp_ring_buffer.h"
 #include "socket.h"
 #include "eth_out.h"
 #include "tcp_in.h"
@@ -948,7 +949,7 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 
 		for (rx_inf = 0; rx_inf < CONFIG.eths_num; rx_inf++)
 		{
-
+			mtcp->iom->release_pkt(ctx, rx_inf);
 			recv_cnt = mtcp->iom->recv_pkts(ctx, rx_inf);
 			STAT_COUNT(mtcp->runstat.rounds_rx_try);
 			// printf("recv_cnt(%d)\n", recv_cnt);

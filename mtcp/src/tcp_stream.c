@@ -2,11 +2,12 @@
 #include "fhash.h"
 #include "tcp_in.h"
 #include "tcp_out.h"
-#include "tcp_ring_buffer.h"
 
 #ifdef ZERO_COPY_VERSION
+#include "zc_tcp_ring_buffer.h"
 #include "zc_tcp_send_buffer.h"
 #else
+#include "tcp_ring_buffer.h"
 #include "tcp_send_buffer.h"
 #endif
 
@@ -576,7 +577,11 @@ void DestroyTCPStream(mtcp_manager_t mtcp, tcp_stream *stream)
 	}
 	if (stream->rcvvar->rcvbuf)
 	{
+#ifdef ZERO_COPY_VERSION
+		ZC_RBFree(mtcp->rbm_rcv, stream->rcvvar->rcvbuf);
+#else
 		RBFree(mtcp->rbm_rcv, stream->rcvvar->rcvbuf);
+#endif
 		stream->rcvvar->rcvbuf = NULL;
 	}
 #ifndef EABLE_COROUTINE
@@ -732,10 +737,9 @@ void DumpStream(mtcp_manager_t mtcp, tcp_stream *stream)
 	{
 		thread_printf(mtcp, mtcp->log_fp,
 					  "Receive buffer: init_seq: %u, head_seq: %u, "
-					  "merged_len: %d, cum_len: %lu, last_len: %d, size: %d\n",
+					  "merged_len: %d, cum_len: %lu\n",
 					  rcvvar->rcvbuf->init_seq, rcvvar->rcvbuf->head_seq,
-					  rcvvar->rcvbuf->merged_len, rcvvar->rcvbuf->cum_len,
-					  rcvvar->rcvbuf->last_len, rcvvar->rcvbuf->size);
+					  rcvvar->rcvbuf->merged_len, rcvvar->rcvbuf->cum_len);
 	}
 	else
 	{

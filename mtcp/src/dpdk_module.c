@@ -49,7 +49,7 @@
 #endif /* !ENABLELRO */
 #define MBUF_SIZE (BUF_SIZE + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
 
-#define NB_MBUF 4096
+#define NB_MBUF 8192
 #define MEMPOOL_CACHE_SIZE 64
 #ifdef ENFORCE_RX_IDLE
 #define RX_IDLE_ENABLE 1
@@ -76,7 +76,10 @@
 #define TX_WTHRESH 0  /**< Default values of TX write-back threshold reg. */
 
 #define TX_QUEUE_NUM 4096
+#define RX_QUEUE_NUM 16384
 #define MAX_PKT_BURST 128 // 64 /*128*/
+#define MAX_RX_PKT_BURST 1024
+
 /*
  * Configurable number of RX/TX ring descriptors
  */
@@ -178,12 +181,22 @@ struct mbuf_table
 	struct rte_mbuf *m_table[TX_QUEUE_NUM];
 };
 
+struct rmbuf_table
+{
+	uint16_t len; /* length of queued packets */
+	uint16_t tail;
+	uint16_t head;
+	uint16_t unused;
+	struct rte_mbuf *m_table[RX_QUEUE_NUM];
+	struct mtcp_zc_rmbuf r_table[RX_QUEUE_NUM];
+};
+
 struct dpdk_private_context
 {
-	struct mbuf_table rmbufs[HL_MAX_ETHPORTS];
+	struct rmbuf_table rmbufs[HL_MAX_ETHPORTS];
 	struct mbuf_table wmbufs[HL_MAX_ETHPORTS];
 	struct rte_mempool *pktmbuf_pool;
-	struct rte_mbuf *pkts_burst[TX_QUEUE_NUM];
+	struct rte_mbuf *pkts_burst[MAX_RX_PKT_BURST];
 #ifdef RX_IDLE_ENABLE
 	uint8_t rx_idle;
 #endif
@@ -228,7 +241,7 @@ struct stats_struct
 void dpdk_init_handle(struct mtcp_thread_context *ctxt)
 {
 	struct dpdk_private_context *dpc;
-	int i, j;
+	int j;
 	char mempool_name[RTE_MEMPOOL_NAMESIZE];
 
 	/* create and initialize private I/O module context */
@@ -266,6 +279,11 @@ void dpdk_init_handle(struct mtcp_thread_context *ctxt)
 		dpc->wmbufs[j].head = 0;
 		dpc->wmbufs[j].tail = 0;
 		dpc->wmbufs[j].unused = 0;
+
+		dpc->rmbufs[j].len = 0;
+		dpc->rmbufs[j].head = 0;
+		dpc->rmbufs[j].tail = 0;
+		dpc->rmbufs[j].unused = 0;
 	}
 
 #ifdef IP_DEFRAG
@@ -308,12 +326,47 @@ int dpdk_link_devices(struct mtcp_thread_context *ctxt)
 	return 0;
 }
 /*----------------------------------------------------------------------------*/
-void dpdk_release_pkt(struct mtcp_thread_context *ctxt, int ifidx, unsigned char *pkt_data, int len)
+void dpdk_release_pkt(struct mtcp_thread_context *ctxt, int ifidx)
 {
 	/*
 	 * do nothing over here - memory reclamation
 	 * will take place in dpdk_recv_pkts
 	 */
+	struct dpdk_private_context *dpc;
+	int tail, head;
+
+	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
+
+	head = dpc->rmbufs[ifidx].head;
+	tail = dpc->rmbufs[ifidx].tail;
+
+	while (head != tail)
+	{
+		if (dpc->rmbufs[ifidx].r_table[head].free == 1)
+		{
+			rte_pktmbuf_free(dpc->rmbufs[ifidx].m_table[head]);
+		}
+		else if (dpc->rmbufs[ifidx].r_table[head].free == 0)
+		{
+			break;
+		}
+		head = (head + 1) % RX_QUEUE_NUM;
+	}
+	int cnt = 0;
+
+	dpc->rmbufs[ifidx].head = head;
+	while (head != tail)
+	{
+		if (dpc->rmbufs[ifidx].r_table[head].free == 1)
+		{
+			rte_pktmbuf_free(dpc->rmbufs[ifidx].m_table[head]);
+			dpc->rmbufs[ifidx].r_table[head].free = 2;
+			cnt++;
+		}
+		head = (head + 1) % RX_QUEUE_NUM;
+	}
+	if (cnt > 0)
+		printf(" head(%d) tail(%d) free cnt(%d)\n", dpc->rmbufs[ifidx].head, tail, cnt);
 }
 /*----------------------------------------------------------------------------*/
 int dpdk_send_pkts(struct mtcp_thread_context *ctxt, int ifidx, int flag)
@@ -489,6 +542,36 @@ free_pkts(struct rte_mbuf **mtable, unsigned len)
 	}
 }
 /*----------------------------------------------------------------------------*/
+// int32_t
+// dpdk_recv_pkts(struct mtcp_thread_context *ctxt, int ifidx)
+// {
+// 	struct dpdk_private_context *dpc;
+// 	int ret;
+
+// 	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
+
+// 	if (dpc->rmbufs[ifidx].len != 0)
+// 	{
+// 		free_pkts(dpc->rmbufs[ifidx].m_table, dpc->rmbufs[ifidx].len);
+// 		dpc->rmbufs[ifidx].len = 0;
+// 	}
+
+// 	int portid = CONFIG.eths[ifidx].ifindex;
+// 	ret = rte_eth_rx_burst((uint8_t)portid, ctxt->cpu,
+// 						   dpc->pkts_burst, TX_QUEUE_NUM);
+// #ifdef RX_IDLE_ENABLE
+// 	dpc->rx_idle = (likely(ret != 0)) ? 0 : dpc->rx_idle + 1;
+// #endif
+// 	dpc->rmbufs[ifidx].len = ret;
+
+// 	return ret;
+// }
+
+#define RED "\x1B[31m"
+#define RESET "\x1B[0m"
+#define PRINT_ERROR(fmt, ...) \
+	printf(RED "Error: " fmt RESET "\n", ##__VA_ARGS__)
+
 int32_t
 dpdk_recv_pkts(struct mtcp_thread_context *ctxt, int ifidx)
 {
@@ -496,21 +579,23 @@ dpdk_recv_pkts(struct mtcp_thread_context *ctxt, int ifidx)
 	int ret;
 
 	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
+	int head, tail, cnt;
+	tail = dpc->rmbufs[ifidx].tail;
+	head = dpc->rmbufs[ifidx].head;
 
-	if (dpc->rmbufs[ifidx].len != 0)
+	if (dpc->rmbufs[ifidx].len > RX_QUEUE_NUM*8/10)
 	{
-		free_pkts(dpc->rmbufs[ifidx].m_table, dpc->rmbufs[ifidx].len);
-		dpc->rmbufs[ifidx].len = 0;
+		PRINT_ERROR("dpdk_recv_pkts full!!! tail(%d) head(%d) \n", tail, head);
 	}
 
+	cnt = MAX_RX_PKT_BURST;
 	int portid = CONFIG.eths[ifidx].ifindex;
 	ret = rte_eth_rx_burst((uint8_t)portid, ctxt->cpu,
-						   dpc->pkts_burst, TX_QUEUE_NUM);
+						   dpc->pkts_burst, cnt);
 #ifdef RX_IDLE_ENABLE
 	dpc->rx_idle = (likely(ret != 0)) ? 0 : dpc->rx_idle + 1;
 #endif
-	dpc->rmbufs[ifidx].len = ret;
-
+	// printf("dpdk_recv_pkts ret(%d) cnt(%d)\n", ret, cnt);
 	return ret;
 }
 /*----------------------------------------------------------------------------*/
@@ -564,6 +649,7 @@ dpdk_get_rptr(struct mtcp_thread_context *ctxt, int ifidx, int index, uint16_t *
 {
 	struct dpdk_private_context *dpc;
 	struct rte_mbuf *m;
+	int tail;
 	uint8_t *pktbuf;
 
 	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
@@ -574,9 +660,27 @@ dpdk_get_rptr(struct mtcp_thread_context *ctxt, int ifidx, int index, uint16_t *
 #endif
 	*len = m->pkt_len;
 	pktbuf = rte_pktmbuf_mtod(m, uint8_t *);
+	if (pktbuf == NULL)
+	{
+		return NULL;
+	}
 
 	/* enqueue the pkt ptr in mbuf */
-	dpc->rmbufs[ifidx].m_table[index] = m;
+	tail = dpc->rmbufs[ifidx].tail;
+	dpc->rmbufs[ifidx].m_table[tail] = m;
+	dpc->rmbufs[ifidx].r_table[tail].bsd_mbuf = pktbuf;
+	dpc->rmbufs[ifidx].r_table[tail].len = *len;
+	dpc->rmbufs[ifidx].r_table[tail].off = 0;
+	dpc->rmbufs[ifidx].r_table[tail].idx = tail;
+	dpc->rmbufs[ifidx].r_table[tail].free = 1;
+
+	dpc->rmbufs[ifidx].tail = (tail + 1) % RX_QUEUE_NUM;
+	dpc->rmbufs[ifidx].len = (dpc->rmbufs[ifidx].tail + RX_QUEUE_NUM - dpc->rmbufs[ifidx].head) % RX_QUEUE_NUM;
+	if (unlikely(dpc->rmbufs[ifidx].tail == dpc->rmbufs[ifidx].head))
+	{
+		PRINT_ERROR("\n dpdk_get_rptr full!!! tail(%d) head(%d) \n", tail, dpc->rmbufs[ifidx].head);
+		// exit(0);
+	}
 
 	/* verify checksum values from ol_flags */
 	if ((m->ol_flags & (RTE_MBUF_F_RX_L4_CKSUM_BAD | RTE_MBUF_F_RX_IP_CKSUM_BAD)) != 0)
@@ -590,7 +694,7 @@ dpdk_get_rptr(struct mtcp_thread_context *ctxt, int ifidx, int index, uint16_t *
 	dpc->cur_rx_m = m;
 #endif /* ENABLELRO */
 
-	return pktbuf;
+	return (uint8_t *)&dpc->rmbufs[ifidx].r_table[tail];
 }
 /*----------------------------------------------------------------------------*/
 int32_t
@@ -727,7 +831,7 @@ void dpdk_load_module(void)
 			 * Plus, each TX queue can hold up to <max_flows> packets.
 			 */
 
-			nb_mbuf = RTE_MAX(max_flows, 2UL * TX_QUEUE_NUM) * MAX_FRAG_NUM;
+			nb_mbuf = RTE_MAX(max_flows, 2UL * RX_QUEUE_NUM) * MAX_FRAG_NUM;
 			nb_mbuf *= (port_conf.rxmode.max_rx_pkt_len + BUF_SIZE - 1) / BUF_SIZE;
 			nb_mbuf += RTE_TEST_RX_DESC_DEFAULT + RTE_TEST_TX_DESC_DEFAULT;
 
@@ -736,7 +840,7 @@ void dpdk_load_module(void)
 			/* create the mbuf pools */
 			pktmbuf_pool[rxlcore_id] =
 				rte_mempool_create(name, nb_mbuf,
-								   MBUF_SIZE, 64,
+								   MBUF_SIZE*4, 64,
 								   sizeof(struct rte_pktmbuf_pool_private),
 								   rte_pktmbuf_pool_init, NULL,
 								   rte_pktmbuf_init, NULL,

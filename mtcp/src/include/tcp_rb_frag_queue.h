@@ -1,7 +1,8 @@
 #ifndef TCP_RB_FRAG_QUEUE
 #define TCP_RB_FRAG_QUEUE
 
-#include "tcp_ring_buffer.h"
+// #if ZERO_COPY_VERSION
+#include "zc_tcp_ring_buffer.h"
 
 /*---------------------------------------------------------------------------*/
 typedef struct rb_frag_queue* rb_frag_queue_t;
