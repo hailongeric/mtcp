@@ -184,8 +184,9 @@ struct mbuf_table
 struct rmbuf_table
 {
 	uint16_t len; /* length of queued packets */
-	uint16_t tail;
-	uint16_t head;
+	uint16_t free_len;
+	struct mtcp_zc_rmbuf *used_list;
+	struct mtcp_zc_rmbuf *free_list;
 	struct mtcp_zc_rmbuf r_table[RX_QUEUE_NUM];
 };
 
@@ -279,9 +280,14 @@ void dpdk_init_handle(struct mtcp_thread_context *ctxt)
 		dpc->wmbufs[j].unused = 0;
 
 		dpc->rmbufs[j].len = 0;
-		dpc->rmbufs[j].head = 0;
-		dpc->rmbufs[j].tail = 0;
-		dpc->rmbufs[j].unused = 0;
+		dpc->rmbufs[j].free_len = RX_QUEUE_NUM;
+		for (int k = 0; k < RX_QUEUE_NUM - 1; k++)
+		{
+			dpc->rmbufs[j].r_table[k].next = &dpc->rmbufs[j].r_table[k + 1];
+		}
+		dpc->rmbufs[j].r_table[RX_QUEUE_NUM - 1].next = NULL;
+		dpc->rmbufs[j].used_list = NULL;
+		dpc->rmbufs[j].free_list = &dpc->rmbufs[j].r_table[0];
 	}
 
 #ifdef IP_DEFRAG
@@ -330,41 +336,47 @@ void dpdk_release_pkt(struct mtcp_thread_context *ctxt, int ifidx)
 	 * do nothing over here - memory reclamation
 	 * will take place in dpdk_recv_pkts
 	 */
+
 	struct dpdk_private_context *dpc;
 	int tail, head;
 
 	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
 
-	head = dpc->rmbufs[ifidx].head;
-	tail = dpc->rmbufs[ifidx].tail;
-
-	while (head != tail)
+	struct rmbuf_table *rmbufs = &dpc->rmbufs[ifidx];
+	// if(rmbufs->len < rmbufs->free_len)
+	// {
+	// 	return;
+	// }
+	struct mtcp_zc_rmbuf *prev, *q, *node;
+	q = rmbufs->used_list;
+	prev = NULL;
+	while (q != NULL)
 	{
-		if (dpc->rmbufs[ifidx].r_table[head].free == 1)
+		if (q->free == 1)
 		{
-			rte_pktmbuf_free(dpc->rmbufs[ifidx].r_table[head].ori_mbuf);
+			rte_pktmbuf_free(q->ori_mbuf);
+			rmbufs->free_len++;
+			rmbufs->len--;
+			node = q;
+			q = q->next;
+			if (prev == NULL)
+			{
+				rmbufs->used_list = q;
+			}
+			else
+			{
+				prev->next = q;
+			}
+			node->next = rmbufs->free_list;
+			rmbufs->free_list = node;
 		}
-		else if (dpc->rmbufs[ifidx].r_table[head].free == 0)
+		else
 		{
-			break;
+			prev = q;
+			q = q->next;
 		}
-		head = (head + 1) % RX_QUEUE_NUM;
 	}
-	int cnt = 0;
 
-	dpc->rmbufs[ifidx].head = head;
-	while (head != tail)
-	{
-		if (dpc->rmbufs[ifidx].r_table[head].free == 1)
-		{
-			rte_pktmbuf_free(dpc->rmbufs[ifidx].r_table[head].ori_mbuf);
-			dpc->rmbufs[ifidx].r_table[head].free = 2;
-			cnt++;
-		}
-		head = (head + 1) % RX_QUEUE_NUM;
-	}
-	if (cnt > 0)
-		printf(" head(%d) tail(%d) free cnt(%d)\n", dpc->rmbufs[ifidx].head, tail, cnt);
 }
 /*----------------------------------------------------------------------------*/
 int dpdk_send_pkts(struct mtcp_thread_context *ctxt, int ifidx, int flag)
@@ -577,16 +589,12 @@ dpdk_recv_pkts(struct mtcp_thread_context *ctxt, int ifidx)
 	int ret;
 
 	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
-	int head, tail, cnt;
-	tail = dpc->rmbufs[ifidx].tail;
-	head = dpc->rmbufs[ifidx].head;
 
-	if (dpc->rmbufs[ifidx].len > RX_QUEUE_NUM*8/10)
+	int cnt = MAX_RX_PKT_BURST > dpc->rmbufs[ifidx].free_len ? dpc->rmbufs[ifidx].free_len : MAX_RX_PKT_BURST;
+	if (cnt < 10)
 	{
-		PRINT_ERROR("dpdk_recv_pkts full!!! tail(%d) head(%d) \n", tail, head);
+		PRINT_ERROR("dpdk_recv_pkts cnt(%d) free_len(%d)\n", cnt, dpc->rmbufs[ifidx].free_len);
 	}
-
-	cnt = MAX_RX_PKT_BURST;
 	int portid = CONFIG.eths[ifidx].ifindex;
 	ret = rte_eth_rx_burst((uint8_t)portid, ctxt->cpu,
 						   dpc->pkts_burst, cnt);
@@ -647,7 +655,6 @@ dpdk_get_rptr(struct mtcp_thread_context *ctxt, int ifidx, int index, uint16_t *
 {
 	struct dpdk_private_context *dpc;
 	struct rte_mbuf *m;
-	int tail;
 	uint8_t *pktbuf;
 
 	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
@@ -664,21 +671,24 @@ dpdk_get_rptr(struct mtcp_thread_context *ctxt, int ifidx, int index, uint16_t *
 	}
 
 	/* enqueue the pkt ptr in mbuf */
-	tail = dpc->rmbufs[ifidx].tail;
-	dpc->rmbufs[ifidx].r_table[tail].ori_mbuf = m;
-	dpc->rmbufs[ifidx].r_table[tail].bsd_mbuf = pktbuf;
-	dpc->rmbufs[ifidx].r_table[tail].len = *len;
-	dpc->rmbufs[ifidx].r_table[tail].off = 0;
-	dpc->rmbufs[ifidx].r_table[tail].idx = tail;
-	dpc->rmbufs[ifidx].r_table[tail].free = 1;
-
-	dpc->rmbufs[ifidx].tail = (tail + 1) % RX_QUEUE_NUM;
-	dpc->rmbufs[ifidx].len = (dpc->rmbufs[ifidx].tail + RX_QUEUE_NUM - dpc->rmbufs[ifidx].head) % RX_QUEUE_NUM;
-	if (unlikely(dpc->rmbufs[ifidx].tail == dpc->rmbufs[ifidx].head))
+	if (unlikely(dpc->rmbufs[ifidx].free_len <= 0))
 	{
-		PRINT_ERROR("\n dpdk_get_rptr full!!! tail(%d) head(%d) \n", tail, dpc->rmbufs[ifidx].head);
-		// exit(0);
+		PRINT_ERROR("dpdk_get_rptr free_len(%d) ifidx(%d) index(%d)\n", dpc->rmbufs[ifidx].free_len, ifidx, index);
+		return NULL;
 	}
+	struct mtcp_zc_rmbuf *node = dpc->rmbufs[ifidx].free_list;
+	dpc->rmbufs[ifidx].free_list = node->next;
+	dpc->rmbufs[ifidx].free_len--;
+	dpc->rmbufs[ifidx].len++;
+
+	node->ori_mbuf = m;
+	node->bsd_mbuf = pktbuf;
+	node->len = *len;
+	node->off = 0;
+	node->free = 1;
+
+	node->next = dpc->rmbufs[ifidx].used_list;
+	dpc->rmbufs[ifidx].used_list = node;
 
 	/* verify checksum values from ol_flags */
 	if ((m->ol_flags & (RTE_MBUF_F_RX_L4_CKSUM_BAD | RTE_MBUF_F_RX_IP_CKSUM_BAD)) != 0)
@@ -692,7 +702,7 @@ dpdk_get_rptr(struct mtcp_thread_context *ctxt, int ifidx, int index, uint16_t *
 	dpc->cur_rx_m = m;
 #endif /* ENABLELRO */
 
-	return (uint8_t *)&dpc->rmbufs[ifidx].r_table[tail];
+	return (uint8_t *)node;
 }
 /*----------------------------------------------------------------------------*/
 int32_t
@@ -838,7 +848,7 @@ void dpdk_load_module(void)
 			/* create the mbuf pools */
 			pktmbuf_pool[rxlcore_id] =
 				rte_mempool_create(name, nb_mbuf,
-								   MBUF_SIZE*4, 64,
+								   MBUF_SIZE * 4, 64,
 								   sizeof(struct rte_pktmbuf_pool_private),
 								   rte_pktmbuf_pool_init, NULL,
 								   rte_pktmbuf_init, NULL,

@@ -333,7 +333,7 @@ int ZC_RBPut(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff,
 		data->free = 0;
 		data->len = len;
 		buff->need_seq = cur_seq + len;
-		idx = (idx + 1) % buff->q_len;
+		idx = (idx + 1) % ZC_PKT_COUNT;
 		buff->r_tail = idx;
 		if (buff->r_tail == buff->r_head)
 		{
@@ -343,12 +343,8 @@ int ZC_RBPut(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff,
 	}
 	else if (putx > 0)
 	{
-		// printf("s2 buff->u_qlen(%d)\n",buff->u_qlen);
-		printf("insq(%u) head_seq %u, cur_seq %u, need_seq %u buff->u_qlen(%d)\n", buff->init_seq, buff->head_seq, cur_seq, buff->need_seq, buff->u_qlen);
 		int i = buff->r_tail;
-		i = (i - 1) % buff->q_len;
-
-		printf("idx[%d] seq(%u) len(%u) buff->merged_len(%d)\n", i, buff->data[i]->seq, buff->data[i]->len,buff->merged_len);
+		i = (i + ZC_PKT_COUNT - 1) % ZC_PKT_COUNT;
 
 		assert(buff->u_qlen < ZC_UNSORTED_PKT_COUNT);
 		struct rmbuf_list *node = buff->free_list;
@@ -423,6 +419,8 @@ int ZC_RBPut(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff,
 				q->next = buff->free_list;
 				buff->free_list = q;
 				buff->u_qlen--;
+				q = buff->unsort_data;
+				printf("insq(%u) head_seq %u, cur_seq %u, need_seq %u buff->u_qlen(%d)\n", buff->init_seq, buff->head_seq, cur_seq, buff->need_seq, buff->u_qlen);
 			}
 		}
 		else if (q->data->seq == buff->need_seq)
@@ -441,6 +439,7 @@ int ZC_RBPut(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff,
 			q->next = buff->free_list;
 			buff->free_list = q;
 			buff->u_qlen--;
+			q = buff->unsort_data;
 		}
 	}
 
