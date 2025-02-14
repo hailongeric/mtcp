@@ -186,8 +186,6 @@ struct rmbuf_table
 	uint16_t len; /* length of queued packets */
 	uint16_t tail;
 	uint16_t head;
-	uint16_t unused;
-	struct rte_mbuf *m_table[RX_QUEUE_NUM];
 	struct mtcp_zc_rmbuf r_table[RX_QUEUE_NUM];
 };
 
@@ -344,7 +342,7 @@ void dpdk_release_pkt(struct mtcp_thread_context *ctxt, int ifidx)
 	{
 		if (dpc->rmbufs[ifidx].r_table[head].free == 1)
 		{
-			rte_pktmbuf_free(dpc->rmbufs[ifidx].m_table[head]);
+			rte_pktmbuf_free(dpc->rmbufs[ifidx].r_table[head].ori_mbuf);
 		}
 		else if (dpc->rmbufs[ifidx].r_table[head].free == 0)
 		{
@@ -359,7 +357,7 @@ void dpdk_release_pkt(struct mtcp_thread_context *ctxt, int ifidx)
 	{
 		if (dpc->rmbufs[ifidx].r_table[head].free == 1)
 		{
-			rte_pktmbuf_free(dpc->rmbufs[ifidx].m_table[head]);
+			rte_pktmbuf_free(dpc->rmbufs[ifidx].r_table[head].ori_mbuf);
 			dpc->rmbufs[ifidx].r_table[head].free = 2;
 			cnt++;
 		}
@@ -667,7 +665,7 @@ dpdk_get_rptr(struct mtcp_thread_context *ctxt, int ifidx, int index, uint16_t *
 
 	/* enqueue the pkt ptr in mbuf */
 	tail = dpc->rmbufs[ifidx].tail;
-	dpc->rmbufs[ifidx].m_table[tail] = m;
+	dpc->rmbufs[ifidx].r_table[tail].ori_mbuf = m;
 	dpc->rmbufs[ifidx].r_table[tail].bsd_mbuf = pktbuf;
 	dpc->rmbufs[ifidx].r_table[tail].len = *len;
 	dpc->rmbufs[ifidx].r_table[tail].off = 0;
