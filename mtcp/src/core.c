@@ -906,7 +906,7 @@ InterruptApplication(mtcp_manager_t mtcp)
 // //              : "=r"(result));
 // static struct timeval hl_time = {0};
 /*----------------------------------------------------------------------------*/
-// #define MAX_PKT_BURST 128 
+// #define MAX_PKT_BURST 128
 static void
 RunMainLoop(struct mtcp_thread_context *ctx)
 {
@@ -1052,6 +1052,12 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 		if (ctx->interrupt)
 		{
 			InterruptApplication(mtcp);
+#ifdef EABLE_COROUTINE
+		}
+		else
+		{
+			YieldToApp(ctx, TRUE);
+#endif
 		}
 	}
 

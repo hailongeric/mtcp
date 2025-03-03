@@ -72,6 +72,7 @@ ZC_EthernetOutput(struct mtcp_manager *mtcp, uint16_t h_proto,
 	if (!buf)
 	{
 		printf("data len(%d) iplen(%d) ETHERNET_HEADER_LEN(%d) head_room(%d)\n", zc_mbuf->len, iplen, ETHERNET_HEADER_LEN,rte_pktmbuf_headroom(zc_mbuf->bsd_mbuf));
+		//data len(600) iplen(1500) ETHERNET_HEADER_LEN(14) head_room(128
 		TRACE_ERROR("zc Failed to get available write buffer\n");
 		exit(0);
 		return NULL;

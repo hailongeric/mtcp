@@ -559,6 +559,8 @@ FlushTCPSendingBuffer(mtcp_manager_t mtcp, tcp_stream *cur_stream, uint32_t cur_
 
 		/* payload size limited by TCP MSS */
 		pkt_len = MIN(len, sndvar->mss - CalculateOptionLength(TCP_FLAG_ACK));
+		// printf("len %d pkt_len %d\n", len, pkt_len);
+		pkt_len = MIN(pkt_len, data->len); // ! hl patch
 
 		// #if RATE_LIMIT_ENABLED
 		// 		// update rate

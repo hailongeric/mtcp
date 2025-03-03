@@ -66,7 +66,7 @@ extern "C"
 	char *
 	EventToString(uint32_t event);
 	/*----------------------------------------------------------------------------*/
-	pthread_cond_t *mtcp_get_epoll_wait_cond(mctx_t mtcx);
+	void *mtcp_get_epoll_wait_cond(mctx_t mtcx);
 
 #ifdef __cplusplus
 };

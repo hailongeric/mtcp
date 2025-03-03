@@ -25,19 +25,19 @@ struct mtcp_epoll_event_int
 /*----------------------------------------------------------------------------*/
 enum event_queue_type
 {
-	USR_EVENT_QUEUE = 0, 
-	USR_SHADOW_EVENT_QUEUE = 1, 
+	USR_EVENT_QUEUE = 0,
+	USR_SHADOW_EVENT_QUEUE = 1,
 	MTCP_EVENT_QUEUE = 2
 };
 /*----------------------------------------------------------------------------*/
 struct event_queue
 {
 	struct mtcp_epoll_event_int *events;
-	int start;			// starting index
-	int end;			// ending index
-	
-	int size;			// max size
-	int num_events;		// number of events
+	int start; // starting index
+	int end;   // ending index
+
+	int size;		// max size
+	int num_events; // number of events
 };
 /*----------------------------------------------------------------------------*/
 struct mtcp_epoll
@@ -48,13 +48,15 @@ struct mtcp_epoll
 
 	uint8_t waiting;
 	struct mtcp_epoll_stat stat;
-	
+#ifdef EABLE_COROUTINE
+	int ret_flag;
+#else
 	pthread_cond_t epoll_cond;
+#endif
 	pthread_mutex_t epoll_lock;
 };
 /*----------------------------------------------------------------------------*/
 
-int 
-CloseEpollSocket(mctx_t mctx, int epid);
+int CloseEpollSocket(mctx_t mctx, int epid);
 
 #endif /* EVENTPOLL_H */

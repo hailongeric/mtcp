@@ -343,10 +343,6 @@ void dpdk_release_pkt(struct mtcp_thread_context *ctxt, int ifidx)
 	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
 
 	struct rmbuf_table *rmbufs = &dpc->rmbufs[ifidx];
-	// if(rmbufs->len < rmbufs->free_len)
-	// {
-	// 	return;
-	// }
 	struct mtcp_zc_rmbuf *prev, *q, *node;
 	q = rmbufs->used_list;
 	prev = NULL;

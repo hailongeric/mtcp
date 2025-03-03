@@ -190,6 +190,7 @@ int mtcp_epoll_create(mctx_t mctx, int size)
 		free(ep);
 		return -1;
 	}
+#ifndef EABLE_COROUTINE
 	if (pthread_cond_init(&ep->epoll_cond, NULL))
 	{
 		DestroyEventQueue(ep->mtcp_queue);
@@ -199,6 +200,7 @@ int mtcp_epoll_create(mctx_t mctx, int size)
 		free(ep);
 		return -1;
 	}
+#endif
 
 	return epsocket->id;
 }
@@ -228,10 +230,13 @@ int CloseEpollSocket(mctx_t mctx, int epid)
 	pthread_mutex_lock(&ep->epoll_lock);
 	mtcp->ep = NULL;
 	mtcp->smap[epid].ep = NULL;
+#ifndef EABLE_COROUTINE
 	pthread_cond_signal(&ep->epoll_cond);
+#endif
 	pthread_mutex_unlock(&ep->epoll_lock);
-
+#ifndef EABLE_COROUTINE
 	pthread_cond_destroy(&ep->epoll_cond);
+#endif
 	pthread_mutex_destroy(&ep->epoll_lock);
 	free(ep);
 
@@ -398,7 +403,7 @@ int mtcp_epoll_ctl(mctx_t mctx, int epid,
 }
 /*----------------------------------------------------------------------------*/
 
-pthread_cond_t *mtcp_get_epoll_wait_cond(mctx_t mtcx)
+void *mtcp_get_epoll_wait_cond(mctx_t mtcx)
 {
 	mtcp_manager_t mtcp;
 
@@ -407,7 +412,11 @@ pthread_cond_t *mtcp_get_epoll_wait_cond(mctx_t mtcx)
 	{
 		return NULL;
 	}
+#ifdef EABLE_COROUTINE
+	return &mtcp->ep->ret_flag;
+#else
 	return &mtcp->ep->epoll_cond;
+#endif
 }
 int mtcp_epoll_wait(mctx_t mctx, int epid,
 					struct mtcp_epoll_event *events, int maxevents, int timeout)
@@ -547,8 +556,20 @@ wait:
 		else if (timeout < 0)
 		{
 #ifdef EABLE_COROUTINE
+			// ep->ret_flag = 0;
+			// ! hl_patch
 			while (ep->waiting)
+			{
 				YieldToStack(mtcp->ctx, YIELD_REASON_EPOLL);
+				if (ep->ret_flag == 1)
+				{
+					ep->ret_flag = 0;
+					timeout = 0;
+					break;
+				}
+				break;
+			}
+			timeout = 0;
 #else
 			ret = pthread_cond_wait(&ep->epoll_cond, &ep->epoll_lock);
 			if (ret)
