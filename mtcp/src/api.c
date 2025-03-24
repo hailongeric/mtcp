@@ -1271,6 +1271,8 @@ PeekForUser(mtcp_manager_t mtcp, tcp_stream *cur_stream, char *buf, int len)
 		if (temp_len <= copylen - copyed_len)
 		{
 			memcpy(buf + copyed_len, rcvvar->rcvbuf->data[r_head]->bsd_mbuf + rcvvar->rcvbuf->data[r_head]->off, temp_len);
+			rte_pktmbuf_free(rcvvar->rcvbuf->data[r_head]->ori_mbuf);
+			rcvvar->rcvbuf->data[r_head]->ori_mbuf = NULL;
 			rcvvar->rcvbuf->data[r_head]->free = 1;
 			copyed_len += temp_len;
 			r_head = (r_head + 1) % rcvvar->rcvbuf->q_len;
@@ -1327,6 +1329,8 @@ CopyToUser(mtcp_manager_t mtcp, tcp_stream *cur_stream, char *buf, int len)
 		if (temp_len <= copylen - copyed_len)
 		{
 			memcpy(buf + copyed_len, rcvvar->rcvbuf->data[r_head]->bsd_mbuf + rcvvar->rcvbuf->data[r_head]->off, temp_len);
+			rte_pktmbuf_free(rcvvar->rcvbuf->data[r_head]->ori_mbuf);
+			rcvvar->rcvbuf->data[r_head]->ori_mbuf = NULL;
 			rcvvar->rcvbuf->data[r_head]->free = 1;
 			copyed_len += temp_len;
 			r_head = (r_head + 1) % rcvvar->rcvbuf->q_len;
@@ -1688,7 +1692,7 @@ CopyFromUser(mtcp_manager_t mtcp, tcp_stream *cur_stream, const char *buf, int l
 	int sndlen;
 	int ret;
 
-	sndlen = MIN((int)sndvar->snd_wnd, len);
+	sndlen = MIN((int)sndvar->snd_wnd, len); // ! to do modify
 	if (sndlen <= 0)
 	{
 		errno = EAGAIN;

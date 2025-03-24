@@ -29,10 +29,11 @@ zc_mbuf_t
 ZC_MPAllocateOne(mem_pool_t mp)
 {
 	zc_mbuf_t mbuf = rte_pktmbuf_alloc(mp);
-	mbuf->ol_flags = RTE_MBUF_F_TX_TCP_CKSUM | RTE_MBUF_F_TX_IP_CKSUM | RTE_MBUF_F_TX_IPV4;
-    if (mbuf == NULL) {
+	if (mbuf == NULL) {
+		TRACE_ERROR("Can't allocate memory for mbuf!\n");
         return NULL;
     }
+	mbuf->ol_flags = RTE_MBUF_F_TX_TCP_CKSUM | RTE_MBUF_F_TX_IP_CKSUM | RTE_MBUF_F_TX_IPV4;
 	return mbuf;
 }
 
