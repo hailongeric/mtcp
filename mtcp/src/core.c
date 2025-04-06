@@ -221,10 +221,6 @@ PrintThreadNetworkStats(mtcp_manager_t mtcp, struct net_stat *ns)
 		}
 #endif
 	}
-#ifdef ENABLELRO
-	ns->rx_gdptbytes = mtcp->nstat.rx_gdptbytes - mtcp->p_nstat.rx_gdptbytes;
-	ns->tx_gdptbytes = mtcp->nstat.tx_gdptbytes - mtcp->p_nstat.tx_gdptbytes;
-#endif
 	mtcp->p_nstat = mtcp->nstat;
 }
 /*----------------------------------------------------------------------------*/
@@ -314,10 +310,6 @@ PrintNetworkStats(mtcp_manager_t mtcp, uint32_t cur_ts)
 				g_nstat.tx_drops[j] += ns.tx_drops[j];
 				g_nstat.tx_bytes[j] += ns.tx_bytes[j];
 			}
-#ifdef ENABLELRO
-			g_nstat.rx_gdptbytes += ns.rx_gdptbytes;
-			g_nstat.tx_gdptbytes += ns.tx_gdptbytes;
-#endif
 #endif
 		}
 	}
@@ -335,10 +327,6 @@ PrintNetworkStats(mtcp_manager_t mtcp, uint32_t cur_ts)
 					GBPS(g_nstat.tx_bytes[i]));
 		}
 	}
-#ifdef ENABLELRO
-	fprintf(stderr, "[ ALL ] Goodput RX: %5.2lf(Gbps), TX: %5.2lf(Gbps)\n",
-			GBPS(g_nstat.rx_gdptbytes), GBPS(g_nstat.tx_gdptbytes));
-#endif
 #endif
 
 #if ROUND_STAT
@@ -949,7 +937,7 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 
 		for (rx_inf = 0; rx_inf < CONFIG.eths_num; rx_inf++)
 		{
-			mtcp->iom->release_pkt(ctx, rx_inf);
+			// mtcp->iom->release_pkt(ctx, rx_inf);
 			recv_cnt = mtcp->iom->recv_pkts(ctx, rx_inf);
 			STAT_COUNT(mtcp->runstat.rounds_rx_try);
 			// printf("recv_cnt(%d)\n", recv_cnt);

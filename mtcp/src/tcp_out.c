@@ -203,9 +203,6 @@ int SendTCPPacketStandalone(struct mtcp_manager *mtcp,
 	if (payloadlen > 0)
 	{
 		memcpy((uint8_t *)tcph + TCP_HEADER_LEN + optlen, payload, payloadlen);
-#if defined(NETSTAT) && defined(ENABLELRO)
-		mtcp->nstat.tx_gdptbytes += payloadlen;
-#endif /* NETSTAT */
 	}
 
 #if TCP_CALCULATE_CHECKSUM

@@ -1270,7 +1270,7 @@ PeekForUser(mtcp_manager_t mtcp, tcp_stream *cur_stream, char *buf, int len)
 		temp_len = rcvvar->rcvbuf->data[r_head]->len;
 		if (temp_len <= copylen - copyed_len)
 		{
-			memcpy(buf + copyed_len, rcvvar->rcvbuf->data[r_head]->bsd_mbuf + rcvvar->rcvbuf->data[r_head]->off, temp_len);
+			rte_memcpy(buf + copyed_len, rcvvar->rcvbuf->data[r_head]->bsd_mbuf + rcvvar->rcvbuf->data[r_head]->off, temp_len);
 			rte_pktmbuf_free(rcvvar->rcvbuf->data[r_head]->ori_mbuf);
 			rcvvar->rcvbuf->data[r_head]->ori_mbuf = NULL;
 			rcvvar->rcvbuf->data[r_head]->free = 1;
@@ -1279,7 +1279,7 @@ PeekForUser(mtcp_manager_t mtcp, tcp_stream *cur_stream, char *buf, int len)
 		}
 		else
 		{
-			memcpy(buf + copyed_len, rcvvar->rcvbuf->data[r_head]->bsd_mbuf + rcvvar->rcvbuf->data[r_head]->off, copylen - copyed_len);
+			rte_memcpy(buf + copyed_len, rcvvar->rcvbuf->data[r_head]->bsd_mbuf + rcvvar->rcvbuf->data[r_head]->off, copylen - copyed_len);
 			rcvvar->rcvbuf->data[r_head]->off = copylen - copyed_len;
 			rcvvar->rcvbuf->data[r_head]->len = temp_len - (copylen - copyed_len);
 			copyed_len += copylen - copyed_len;

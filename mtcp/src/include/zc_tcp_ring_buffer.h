@@ -57,7 +57,7 @@ struct rmbuf_list
 
 #define ZC_PKT_COUNT 512
 #define ZC_UNSORTED_PKT_COUNT 512
-#define WINDOWS_SIZE (ZC_PKT_COUNT * 900)
+#define WINDOWS_SIZE (ZC_PKT_COUNT * 1024)
 
 struct zc_tcp_ring_buffer
 {

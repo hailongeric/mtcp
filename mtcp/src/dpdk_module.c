@@ -46,10 +46,10 @@
 #define BUF_SIZE 1644
 // sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM == 128
 // #define BUF_SIZE 16384
-#endif /* !ENABLELRO */
+#endif
 #define MBUF_SIZE (BUF_SIZE + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
 
-#define NB_MBUF 8192
+#define NB_MBUF 12288
 #define MEMPOOL_CACHE_SIZE 64
 #ifdef ENFORCE_RX_IDLE
 #define RX_IDLE_ENABLE 1
@@ -76,9 +76,9 @@
 #define TX_WTHRESH 0  /**< Default values of TX write-back threshold reg. */
 
 #define TX_QUEUE_NUM 4096
-#define RX_QUEUE_NUM 16384
+#define RX_QUEUE_NUM 8192
 #define MAX_PKT_BURST 128 // 64 /*128*/
-#define MAX_RX_PKT_BURST 1024
+#define MAX_RX_PKT_BURST 512
 
 /*
  * Configurable number of RX/TX ring descriptors
@@ -111,40 +111,14 @@ static struct rte_eth_dev_info dev_info[HL_MAX_ETHPORTS];
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.mq_mode = ETH_MQ_RX_RSS,
-		// #if RTE_VERSION < RTE_VERSION_NUM(19, 8, 0, 0)
-		// 		.max_rx_pkt_len = 	ETHER_MAX_LEN,
-		// #else
-		// 		.max_rx_pkt_len = 	RTE_ETHER_MAX_LEN,
-		// #endif
-
-		// #if RTE_VERSION > RTE_VERSION_NUM(17, 8, 0, 0)
-		// 		.offloads	=	(
-		// #if RTE_VERSION < RTE_VERSION_NUM(18, 5, 0, 0)
-		// 					 DEV_RX_OFFLOAD_CRC_STRIP |
-		// #endif /* !18.05 */
-		// 					 DEV_RX_OFFLOAD_CHECKSUM
-		// #ifdef ENABLELRO
-		// 					 | DEV_RX_OFFLOAD_TCP_LRO
-		// #endif
-		// 					 ),
-		// #endif /* !17.08 */
 		.mtu = 1500,
 
 		.split_hdr_size = 0,
-		// #if RTE_VERSION < RTE_VERSION_NUM(18, 5, 0, 0)
-		// 		.header_split = 0,	 /**< Header Split disabled */
-		// 		.hw_ip_checksum = 1, /**< IP checksum offload enabled */
-		// 		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
-		// .jumbo_frame = 0,	 /**< Jumbo Frame Support disabled */
-		// 		.hw_strip_crc = 1,	 /**< CRC stripped by hardware */
-		// #endif						 /* !18.05 */
-		.offloads = DEV_RX_OFFLOAD_CHECKSUM,
-#ifdef ENABLELRO
-		.enable_lro = 1, /**< Enable LRO */
-#endif
+		// DEV_RX_OFFLOAD_TCP_LRO
+		.offloads = DEV_RX_OFFLOAD_CHECKSUM ,
 	},
 	.rx_adv_conf = {
-		.rss_conf = {.rss_key = NULL, .rss_hf = ETH_RSS_TCP | ETH_RSS_UDP | ETH_RSS_IP | ETH_RSS_L2_PAYLOAD},
+		.rss_conf = {.rss_key = NULL, .rss_hf = ETH_RSS_TCP | ETH_RSS_UDP | ETH_RSS_IP},
 		// .rss_conf = { .rss_hf = ETH_RSS_TCP | ETH_RSS_UDP | ETH_RSS_IP | ETH_RSS_L2_PAYLOAD},
 	},
 	.txmode = {
@@ -185,8 +159,9 @@ struct rmbuf_table
 {
 	uint16_t len; /* length of queued packets */
 	uint16_t free_len;
-	struct mtcp_zc_rmbuf *used_list;
-	struct mtcp_zc_rmbuf *free_list;
+	uint16_t last_access;
+	// struct mtcp_zc_rmbuf *used_list;
+	// struct mtcp_zc_rmbuf *free_list;
 	struct mtcp_zc_rmbuf r_table[RX_QUEUE_NUM];
 };
 
@@ -281,13 +256,19 @@ void dpdk_init_handle(struct mtcp_thread_context *ctxt)
 
 		dpc->rmbufs[j].len = 0;
 		dpc->rmbufs[j].free_len = RX_QUEUE_NUM;
-		for (int k = 0; k < RX_QUEUE_NUM - 1; k++)
+		dpc->rmbufs[j].last_access = 0;
+		for (int k = 0; k < RX_QUEUE_NUM; k++)
 		{
-			dpc->rmbufs[j].r_table[k].next = &dpc->rmbufs[j].r_table[k + 1];
+			dpc->rmbufs[j].r_table[k].free = 1;
+			dpc->rmbufs[j].r_table[k].ori_mbuf = NULL;
 		}
-		dpc->rmbufs[j].r_table[RX_QUEUE_NUM - 1].next = NULL;
-		dpc->rmbufs[j].used_list = NULL;
-		dpc->rmbufs[j].free_list = &dpc->rmbufs[j].r_table[0];
+		// for (int k = 0; k < RX_QUEUE_NUM - 1; k++)
+		// {
+		// 	dpc->rmbufs[j].r_table[k].next = &dpc->rmbufs[j].r_table[k + 1];
+		// }
+		// dpc->rmbufs[j].r_table[RX_QUEUE_NUM - 1].next = NULL;
+		// dpc->rmbufs[j].used_list = NULL;
+		// dpc->rmbufs[j].free_list = &dpc->rmbufs[j].r_table[0];
 	}
 
 #ifdef IP_DEFRAG
@@ -337,42 +318,41 @@ void dpdk_release_pkt(struct mtcp_thread_context *ctxt, int ifidx)
 	 * will take place in dpdk_recv_pkts
 	 */
 
-	struct dpdk_private_context *dpc;
-	int tail, head;
+	// struct dpdk_private_context *dpc;
+	// int tail, head;
 
-	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
+	// dpc = (struct dpdk_private_context *)ctxt->io_private_context;
 
-	struct rmbuf_table *rmbufs = &dpc->rmbufs[ifidx];
-	struct mtcp_zc_rmbuf *prev, *q, *node;
-	q = rmbufs->used_list;
-	prev = NULL;
-	while (q != NULL)
-	{
-		if (q->free == 1)
-		{
-			rte_pktmbuf_free(q->ori_mbuf);
-			rmbufs->free_len++;
-			rmbufs->len--;
-			node = q;
-			q = q->next;
-			if (prev == NULL)
-			{
-				rmbufs->used_list = q;
-			}
-			else
-			{
-				prev->next = q;
-			}
-			node->next = rmbufs->free_list;
-			rmbufs->free_list = node;
-		}
-		else
-		{
-			prev = q;
-			q = q->next;
-		}
-	}
-
+	// struct rmbuf_table *rmbufs = &dpc->rmbufs[ifidx];
+	// struct mtcp_zc_rmbuf *prev, *q, *node;
+	// q = rmbufs->used_list;
+	// prev = NULL;
+	// while (q != NULL)
+	// {
+	// 	if (q->free == 1)
+	// 	{
+	// 		rte_pktmbuf_free(q->ori_mbuf);
+	// 		rmbufs->free_len++;
+	// 		rmbufs->len--;
+	// 		node = q;
+	// 		q = q->next;
+	// 		if (prev == NULL)
+	// 		{
+	// 			rmbufs->used_list = q;
+	// 		}
+	// 		else
+	// 		{
+	// 			prev->next = q;
+	// 		}
+	// 		node->next = rmbufs->free_list;
+	// 		rmbufs->free_list = node;
+	// 	}
+	// 	else
+	// 	{
+	// 		prev = q;
+	// 		q = q->next;
+	// 	}
+	// }
 }
 /*----------------------------------------------------------------------------*/
 int dpdk_send_pkts(struct mtcp_thread_context *ctxt, int ifidx, int flag)
@@ -586,14 +566,14 @@ dpdk_recv_pkts(struct mtcp_thread_context *ctxt, int ifidx)
 
 	dpc = (struct dpdk_private_context *)ctxt->io_private_context;
 
-	int cnt = MAX_RX_PKT_BURST > dpc->rmbufs[ifidx].free_len ? dpc->rmbufs[ifidx].free_len : MAX_RX_PKT_BURST;
-	if (cnt < 10)
-	{
-		PRINT_ERROR("dpdk_recv_pkts cnt(%d) free_len(%d)\n", cnt, dpc->rmbufs[ifidx].free_len);
-	}
+	// int cnt = MAX_RX_PKT_BURST > dpc->rmbufs[ifidx].free_len ? dpc->rmbufs[ifidx].free_len : MAX_RX_PKT_BURST;
+	// if (cnt < 10)
+	// {
+	// 	PRINT_ERROR("dpdk_recv_pkts cnt(%d) free_len(%d)\n", cnt, dpc->rmbufs[ifidx].free_len);
+	// }
 	int portid = CONFIG.eths[ifidx].ifindex;
 	ret = rte_eth_rx_burst((uint8_t)portid, ctxt->cpu,
-						   dpc->pkts_burst, cnt);
+						   dpc->pkts_burst, MAX_RX_PKT_BURST);
 #ifdef RX_IDLE_ENABLE
 	dpc->rx_idle = (likely(ret != 0)) ? 0 : dpc->rx_idle + 1;
 #endif
@@ -667,15 +647,39 @@ dpdk_get_rptr(struct mtcp_thread_context *ctxt, int ifidx, int index, uint16_t *
 	}
 
 	/* enqueue the pkt ptr in mbuf */
-	if (unlikely(dpc->rmbufs[ifidx].free_len <= 0))
+	// if (unlikely(dpc->rmbufs[ifidx].free_len <= 0))
+	// {
+	// 	PRINT_ERROR("dpdk_get_rptr free_len(%d) ifidx(%d) index(%d)\n", dpc->rmbufs[ifidx].free_len, ifidx, index);
+	// 	return NULL;
+	// }
+	int idx = dpc->rmbufs[ifidx].last_access;
+	struct mtcp_zc_rmbuf *node = NULL;
+	int i = idx;
+
+	do
 	{
-		PRINT_ERROR("dpdk_get_rptr free_len(%d) ifidx(%d) index(%d)\n", dpc->rmbufs[ifidx].free_len, ifidx, index);
+		if (dpc->rmbufs[ifidx].r_table[i].free == 1)
+		{
+			if (dpc->rmbufs[ifidx].r_table[i].ori_mbuf != NULL)
+			{
+				rte_pktmbuf_free(dpc->rmbufs[ifidx].r_table[i].ori_mbuf);
+			}
+			node = &dpc->rmbufs[ifidx].r_table[i];
+			dpc->rmbufs[ifidx].last_access = (i + 1) % RX_QUEUE_NUM;
+			break;
+		}
+		i = (i + 1) % RX_QUEUE_NUM;
+	} while (i != idx);
+
+	// struct mtcp_zc_rmbuf *node = dpc->rmbufs[ifidx].free_list;
+	// dpc->rmbufs[ifidx].free_list = node->next;
+	// dpc->rmbufs[ifidx].free_len--;
+	// dpc->rmbufs[ifidx].len++;
+	if (node == NULL)
+	{
+		PRINT_ERROR("dpdk_get_rptr node is NULL\n");
 		return NULL;
 	}
-	struct mtcp_zc_rmbuf *node = dpc->rmbufs[ifidx].free_list;
-	dpc->rmbufs[ifidx].free_list = node->next;
-	dpc->rmbufs[ifidx].free_len--;
-	dpc->rmbufs[ifidx].len++;
 
 	node->ori_mbuf = m;
 	node->bsd_mbuf = pktbuf;
@@ -683,8 +687,8 @@ dpdk_get_rptr(struct mtcp_thread_context *ctxt, int ifidx, int index, uint16_t *
 	node->off = 0;
 	node->free = 1;
 
-	node->next = dpc->rmbufs[ifidx].used_list;
-	dpc->rmbufs[ifidx].used_list = node;
+	// node->next = dpc->rmbufs[ifidx].used_list;
+	// dpc->rmbufs[ifidx].used_list = node;
 
 	/* verify checksum values from ol_flags */
 	if ((m->ol_flags & (RTE_MBUF_F_RX_L4_CKSUM_BAD | RTE_MBUF_F_RX_IP_CKSUM_BAD)) != 0)
@@ -696,7 +700,7 @@ dpdk_get_rptr(struct mtcp_thread_context *ctxt, int ifidx, int index, uint16_t *
 	}
 #ifdef ENABLELRO
 	dpc->cur_rx_m = m;
-#endif /* ENABLELRO */
+#endif
 
 	return (uint8_t *)node;
 }
@@ -805,15 +809,23 @@ void dpdk_load_module(void)
 	/* for Ethernet flow control settings */
 	struct rte_eth_fc_conf fc_conf;
 	/* setting the rss key */
-	static uint8_t key[] = {
-		0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, /* 10 */
-		0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, /* 20 */
-		0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, /* 30 */
-		0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, /* 40 */
-		0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, /* 50 */
-		0x05, 0x05													/* 60 - 8 */
-	};
+	// static uint8_t key[] = {
+	// 	0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, /* 10 */
+	// 	0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, /* 20 */
+	// 	0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, /* 30 */
+	// 	0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, /* 40 */
+	// 	0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, /* 50 */
+	// 	0x05, 0x05													/* 60 - 8 */
+	// };
 
+	static uint8_t key[] = {
+		0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
+		0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
+		0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
+		0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
+		0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
+		0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
+		0x6d, 0x5a, 0x6d, 0x5a};
 	port_conf.rx_adv_conf.rss_conf.rss_key = (uint8_t *)key;
 	port_conf.rx_adv_conf.rss_conf.rss_key_len = sizeof(key);
 
@@ -866,6 +878,15 @@ void dpdk_load_module(void)
 			rte_eth_dev_info_get(portid, &dev_info[portid]);
 			/* re-adjust rss_hf */
 			port_conf.rx_adv_conf.rss_conf.rss_hf &= dev_info[portid].flow_type_rss_offloads;
+
+			if (dev_info[portid].rx_offload_capa & DEV_RX_OFFLOAD_TCP_LRO)
+			{
+				printf("NIC supports LRO\n");
+			}
+			else
+			{
+				printf("NIC does not support LRO\n");
+			}
 
 			/* init port */
 			printf("Initializing port %u... \n", (unsigned)portid);
@@ -990,10 +1011,6 @@ dpdk_dev_ioctl(struct mtcp_thread_context *ctx, int nif, int cmd, void *argp)
 	struct iphdr *iph;
 	struct tcphdr *tcph;
 	void **argpptr = (void **)argp;
-#ifdef ENABLELRO
-	uint8_t *payload, *to;
-	int seg_off;
-#endif
 	// printf("[+] in dpdk_dev_ioctl cmd(%#x)\n", cmd);
 	if (cmd == DRV_NAME)
 	{
@@ -1034,34 +1051,6 @@ dpdk_dev_ioctl(struct mtcp_thread_context *ctx, int nif, int cmd, void *argp)
 		tcph->check = rte_ipv4_phdr_cksum((struct rte_ipv4_hdr *)iph, m->ol_flags);
 
 		break;
-#ifdef ENABLELRO
-	case PKT_RX_TCP_LROSEG:
-		m = dpc->cur_rx_m;
-		// if (m->next != NULL)
-		//	rte_prefetch0(rte_pktmbuf_mtod(m->next, void *));
-		iph = rte_pktmbuf_mtod_offset(m, struct iphdr *, sizeof(struct ether_hdr));
-		tcph = (struct tcphdr *)((u_char *)iph + (iph->ihl << 2));
-		payload = (uint8_t *)tcph + (tcph->doff << 2);
-
-		seg_off = m->data_len -
-				  sizeof(struct ether_hdr) - (iph->ihl << 2) -
-				  (tcph->doff << 2);
-
-		to = (uint8_t *)argp;
-		m = m->next;
-		memcpy(to, payload, seg_off);
-		while (m != NULL)
-		{
-			// if (m->next != NULL)
-			//	rte_prefetch0(rte_pktmbuf_mtod(m->next, void *));
-			memcpy(to + seg_off,
-				   rte_pktmbuf_mtod(m, uint8_t *),
-				   m->data_len);
-			seg_off += m->data_len;
-			m = m->next;
-		}
-		break;
-#endif
 	case PKT_TX_TCPIP_CSUM:
 		if ((dev_info[nif].tx_offload_capa & DEV_TX_OFFLOAD_IPV4_CKSUM) == 0)
 			goto dev_ioctl_err;

@@ -299,6 +299,7 @@ MergeFragments(struct fragment_ctx *a, struct fragment_ctx *b)
 	b->len = max_seq - min_seq;
 }
 /*----------------------------------------------------------------------------*/
+// todo opt
 int ZC_RBPut(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff,
 			 struct mtcp_zc_rmbuf *data, uint32_t len, uint32_t cur_seq)
 {
@@ -321,7 +322,10 @@ int ZC_RBPut(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff,
 	{
 		return -2;
 	}
-
+	if(len>1600){
+		printf("ZC_RBPut: %u, %u, %u, %u, %u\n", buff->init_seq, buff->head_seq, cur_seq, len, putx);
+		exit(0);
+	}
 	// if buffer is at tail, move the data to the first of head
 	assert(putx >= 0);
 	uint16_t idx = buff->r_tail;
@@ -362,7 +366,7 @@ int ZC_RBPut(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff,
 		prev0 = NULL;
 		while (q)
 		{
-			if (q->data->seq > cur_seq && q->data->seq - cur_seq < 512 * 2048)
+			if (q->data->seq > cur_seq && q->data->seq - cur_seq < ZC_PKT_COUNT * 2048)
 			{
 				break;
 			}
@@ -383,7 +387,7 @@ int ZC_RBPut(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff,
 	q = buff->unsort_data;
 	// increasing sequence
 	// buff->need_seq- q->data->seq < 512 * 2048 in order to sequence number is overflow
-	while (q != NULL && q->data->seq <= buff->need_seq && buff->need_seq - q->data->seq < 512 * 2048)
+	while (q != NULL && q->data->seq <= buff->need_seq && buff->need_seq - q->data->seq < ZC_PKT_COUNT * 2048)
 	{
 		if (q->data->seq < buff->need_seq)
 		{
@@ -394,6 +398,8 @@ int ZC_RBPut(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff,
 				buff->unsort_data = q->next;
 
 				q->data->free = 1;
+				rte_pktmbuf_free(q->data->ori_mbuf);
+				q->data->ori_mbuf = NULL;
 				struct rmbuf_list *node = q;
 				q = q->next;
 				node->next = buff->free_list;
@@ -414,7 +420,7 @@ int ZC_RBPut(rb_manager_t rbm, struct zc_tcp_ring_buffer *buff,
 					printf("rc data Ring buffer is full\n");
 					assert(0);
 				}
-
+				
 				buff->unsort_data = q->next;
 				q->next = buff->free_list;
 				buff->free_list = q;
@@ -578,12 +584,16 @@ void ZC_FreeAllBuffer(struct zc_tcp_ring_buffer *buff)
 	while (r_head != r_tail)
 	{
 		buff->data[r_head]->free = 1;
+		rte_pktmbuf_free(buff->data[r_head]->ori_mbuf);
+		buff->data[r_head]->ori_mbuf = NULL;
 		r_head = (r_head + 1) % buff->q_len;
 	}
 	struct rmbuf_list *q = buff->unsort_data;
 	while (q != NULL)
 	{
 		q->data->free = 1;
+		rte_pktmbuf_free(q->data->ori_mbuf);
+		q->data->ori_mbuf = NULL;
 		q = q->next;
 	}
 	buff->unsort_data = NULL;

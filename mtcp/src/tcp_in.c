@@ -1457,10 +1457,6 @@ int ProcessTCPPacket(struct mtcp_manager *mtcp, uint32_t cur_ts, const int ifidx
 	// 	}
 	// #endif
 
-#if defined(NETSTAT) && defined(ENABLELRO)
-	mtcp->nstat.rx_gdptbytes += payloadlen;
-#endif /* NETSTAT */
-
 	s_stream.saddr = iph->daddr;
 	s_stream.sport = tcph->dest;
 	s_stream.daddr = iph->saddr;
